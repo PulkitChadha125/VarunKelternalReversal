@@ -1077,6 +1077,57 @@ def get_option_quote(kite: KiteConnect, exchange: str, option_symbol: str) -> di
         return {}
 
 
+def place_option_order(
+    kite: KiteConnect,
+    exchange: str,
+    option_symbol: str,
+    transaction_type: str,
+    quantity: int,
+    order_type: str = "MARKET",
+    product: str = "NRML"
+) -> dict:
+    """
+    Place an option order using Kite API.
+    
+    Args:
+        kite: KiteConnect client instance
+        exchange: Exchange name (e.g., "NFO", "MCX")
+        option_symbol: Option trading symbol (e.g., "CRUDEOIL25NOV5300CE")
+        transaction_type: "BUY" or "SELL"
+        quantity: Number of lots (will be multiplied by lot size)
+        order_type: Order type - "MARKET" or "LIMIT" (default: "MARKET")
+        product: Product type - "MIS" (Intraday), "NRML" (Carry forward/Positional), "CNC" (Delivery)
+    
+    Returns:
+        Dictionary with order response from Kite API, or None if failed
+    """
+    try:
+        # Get instrument token for the option
+        instrument_token = get_instrument_token(kite, exchange, option_symbol)
+        if not instrument_token:
+            print(f"[Order] Could not find instrument token for {option_symbol}")
+            return None
+        
+        # Place order
+        order_response = kite.place_order(
+            variety=kite.VARIETY_REGULAR,
+            exchange=exchange,
+            tradingsymbol=option_symbol,
+            transaction_type=transaction_type,
+            quantity=quantity,
+            product=product,
+            order_type=order_type
+        )
+        
+        print(f"[Order] {transaction_type} order placed for {option_symbol}: Order ID = {order_response.get('order_id', 'N/A')}")
+        return order_response
+        
+    except Exception as e:
+        print(f"[Order] Error placing {transaction_type} order for {option_symbol}: {str(e)}")
+        traceback.print_exc()
+        return None
+
+
 def find_exchange_for_symbol(kite: KiteConnect, symbol: str) -> str:
     """
     Find the exchange where a symbol is traded.
@@ -1329,10 +1380,41 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
         # Buy Position Exit: Supertrend changes from green (1) to red (-1)
         if current_position == 'BUY':
             if prev_supertrend_trend is not None and prev_supertrend_trend == 1 and supertrend_trend == -1:
+                # Place SELL order to exit CALL option
+                option_symbol = trading_state.get('option_symbol', None)
+                option_exchange = trading_state.get('option_exchange', None)
+                order_response = None
+                
+                if option_symbol and option_exchange and kite_client:
+                    try:
+                        params = result_dict.get(unique_key, {})
+                        lotsize = int(params.get('Lotsize', 1))
+                        order_response = place_option_order(
+                            kite=kite_client,
+                            exchange=option_exchange,
+                            option_symbol=option_symbol,
+                            transaction_type="SELL",
+                            quantity=lotsize,
+                            order_type="MARKET",
+                            product="NRML"  # Positional
+                        )
+                        
+                        if order_response:
+                            write_to_order_logs(f"EXIT ORDER PLACED: SELL {option_symbol} | Order ID: {order_response.get('order_id', 'N/A')} | Quantity: {lotsize}")
+                        else:
+                            write_to_order_logs(f"EXIT ORDER FAILED: SELL {option_symbol} | Order placement failed")
+                    except Exception as e:
+                        print(f"[Buy Exit] Error placing exit order: {str(e)}")
+                        write_to_order_logs(f"EXIT ORDER ERROR: SELL {option_symbol} | Error: {str(e)}")
+                        traceback.print_exc()
+                
                 # Exit buy position
                 trading_state['position'] = None
                 trading_state['exit_on_candle'] = True  # Prevent entry on this candle
                 trading_state['last_exit_candle_date'] = current_candle_date  # Track which candle we exited on
+                trading_state['option_symbol'] = None  # Clear option symbol
+                trading_state['option_exchange'] = None  # Clear exchange
+                trading_state['option_order_id'] = None  # Clear order ID
                 save_trading_state()  # Save state after position change
                 
                 log_msg = (
@@ -1344,16 +1426,49 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                     f"KC2_Upper: {kc2_upper:.2f} | KC2_Lower: {kc2_lower:.2f} | "
                     f"Supertrend_Value: {supertrend:.2f}"
                 )
+                if option_symbol:
+                    log_msg += f" | Exited Option: {option_symbol}"
                 write_to_order_logs(log_msg)
                 return  # Exit early, no entry on exit candle
         
         # Sell Position Exit: Supertrend changes from red (-1) to green (1)
         if current_position == 'SELL':
             if prev_supertrend_trend is not None and prev_supertrend_trend == -1 and supertrend_trend == 1:
+                # Place SELL order to exit PUT option
+                option_symbol = trading_state.get('option_symbol', None)
+                option_exchange = trading_state.get('option_exchange', None)
+                order_response = None
+                
+                if option_symbol and option_exchange and kite_client:
+                    try:
+                        params = result_dict.get(unique_key, {})
+                        lotsize = int(params.get('Lotsize', 1))
+                        order_response = place_option_order(
+                            kite=kite_client,
+                            exchange=option_exchange,
+                            option_symbol=option_symbol,
+                            transaction_type="SELL",
+                            quantity=lotsize,
+                            order_type="MARKET",
+                            product="NRML"  # Positional
+                        )
+                        
+                        if order_response:
+                            write_to_order_logs(f"EXIT ORDER PLACED: SELL {option_symbol} | Order ID: {order_response.get('order_id', 'N/A')} | Quantity: {lotsize}")
+                        else:
+                            write_to_order_logs(f"EXIT ORDER FAILED: SELL {option_symbol} | Order placement failed")
+                    except Exception as e:
+                        print(f"[Sell Exit] Error placing exit order: {str(e)}")
+                        write_to_order_logs(f"EXIT ORDER ERROR: SELL {option_symbol} | Error: {str(e)}")
+                        traceback.print_exc()
+                
                 # Exit sell position
                 trading_state['position'] = None
                 trading_state['exit_on_candle'] = True  # Prevent entry on this candle
                 trading_state['last_exit_candle_date'] = current_candle_date  # Track which candle we exited on
+                trading_state['option_symbol'] = None  # Clear option symbol
+                trading_state['option_exchange'] = None  # Clear exchange
+                trading_state['option_order_id'] = None  # Clear order ID
                 save_trading_state()  # Save state after position change
                 
                 log_msg = (
@@ -1365,6 +1480,8 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                     f"KC2_Upper: {kc2_upper:.2f} | KC2_Lower: {kc2_lower:.2f} | "
                     f"Supertrend_Value: {supertrend:.2f}"
                 )
+                if option_symbol:
+                    log_msg += f" | Exited Option: {option_symbol}"
                 write_to_order_logs(log_msg)
                 return  # Exit early, no entry on exit candle
         
@@ -1475,6 +1592,33 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                                 print(f"[Buy Entry] Error finding option with max delta: {str(e)}")
                                 traceback.print_exc()
                         
+                        # Place BUY order for CALL option
+                        order_response = None
+                        if selected_option and kite_client:
+                            try:
+                                lotsize = int(params.get('Lotsize', 1))
+                                order_response = place_option_order(
+                                    kite=kite_client,
+                                    exchange=option_exchange,
+                                    option_symbol=selected_option['option_symbol'],
+                                    transaction_type="BUY",
+                                    quantity=lotsize,
+                                    order_type="MARKET",
+                                    product="NRML"  # Positional
+                                )
+                                
+                                if order_response:
+                                    trading_state['option_symbol'] = selected_option['option_symbol']
+                                    trading_state['option_exchange'] = option_exchange
+                                    trading_state['option_order_id'] = order_response.get('order_id', None)
+                                    write_to_order_logs(f"ORDER PLACED: BUY {selected_option['option_symbol']} | Order ID: {order_response.get('order_id', 'N/A')} | Quantity: {lotsize}")
+                                else:
+                                    write_to_order_logs(f"ORDER FAILED: BUY {selected_option['option_symbol']} | Order placement failed")
+                            except Exception as e:
+                                print(f"[Buy Entry] Error placing order: {str(e)}")
+                                write_to_order_logs(f"ORDER ERROR: BUY {selected_option['option_symbol']} | Error: {str(e)}")
+                                traceback.print_exc()
+                        
                         # Take buy position
                         trading_state['position'] = 'BUY'
                         # Keep armed_buy = True to allow re-entry after exit if conditions still met
@@ -1559,6 +1703,33 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                                 )
                             except Exception as e:
                                 print(f"[Sell Entry] Error finding option with max delta: {str(e)}")
+                                traceback.print_exc()
+                        
+                        # Place BUY order for PUT option
+                        order_response = None
+                        if selected_option and kite_client:
+                            try:
+                                lotsize = int(params.get('Lotsize', 1))
+                                order_response = place_option_order(
+                                    kite=kite_client,
+                                    exchange=option_exchange,
+                                    option_symbol=selected_option['option_symbol'],
+                                    transaction_type="BUY",
+                                    quantity=lotsize,
+                                    order_type="MARKET",
+                                    product="NRML"  # Positional
+                                )
+                                
+                                if order_response:
+                                    trading_state['option_symbol'] = selected_option['option_symbol']
+                                    trading_state['option_exchange'] = option_exchange
+                                    trading_state['option_order_id'] = order_response.get('order_id', None)
+                                    write_to_order_logs(f"ORDER PLACED: BUY {selected_option['option_symbol']} | Order ID: {order_response.get('order_id', 'N/A')} | Quantity: {lotsize}")
+                                else:
+                                    write_to_order_logs(f"ORDER FAILED: BUY {selected_option['option_symbol']} | Order placement failed")
+                            except Exception as e:
+                                print(f"[Sell Entry] Error placing order: {str(e)}")
+                                write_to_order_logs(f"ORDER ERROR: BUY {selected_option['option_symbol']} | Error: {str(e)}")
                                 traceback.print_exc()
                         
                         # Take sell position
@@ -1821,8 +1992,19 @@ def main_strategy():
                             'armed_buy': False,
                             'armed_sell': False,
                             'exit_on_candle': False,  # Flag to prevent entry on same candle as exit
-                            'last_exit_candle_date': None  # Track the date of the candle where exit occurred
+                            'last_exit_candle_date': None,  # Track the date of the candle where exit occurred
+                            'option_symbol': None,  # Store the option symbol for current position
+                            'option_exchange': None,  # Store the exchange for current position
+                            'option_order_id': None  # Store the order ID for tracking
                         }
+                    else:
+                        # Ensure new fields exist in existing state
+                        if 'option_symbol' not in trading_states[unique_key]:
+                            trading_states[unique_key]['option_symbol'] = None
+                        if 'option_exchange' not in trading_states[unique_key]:
+                            trading_states[unique_key]['option_exchange'] = None
+                        if 'option_order_id' not in trading_states[unique_key]:
+                            trading_states[unique_key]['option_order_id'] = None
                     
                     # Execute trading strategy on processed data
                     execute_trading_strategy(
