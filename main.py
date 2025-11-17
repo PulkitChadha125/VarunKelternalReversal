@@ -6,6 +6,9 @@ import time
 import traceback
 import json
 from pathlib import Path
+import numpy as np
+from scipy.stats import norm
+from math import log, sqrt, exp
 from zerodha_integration import (
     login,
     get_historical_data,
@@ -856,6 +859,391 @@ def fetch_historical_data_for_symbol(kite: KiteConnect, symbol: str, timeframe: 
         return pd.DataFrame()
 
 
+def normalize_strike(ltp: float, strike_step: int) -> int:
+    """
+    Normalize LTP to nearest strike based on strike step.
+    
+    Args:
+        ltp: Last Traded Price
+        strike_step: Strike step (e.g., 50)
+    
+    Returns:
+        Normalized strike price (ATM)
+    
+    Example:
+        ltp = 5319, strike_step = 50 -> returns 5300
+    """
+    return int(round(ltp / strike_step) * strike_step)
+
+
+def create_strike_list(atm: int, strike_step: int, strike_number: int) -> list:
+    """
+    Create a list of strikes around ATM.
+    
+    Args:
+        atm: At-the-money strike
+        strike_step: Strike step (e.g., 50)
+        strike_number: Number of strikes on each side of ATM
+    
+    Returns:
+        List of strike prices
+    
+    Example:
+        atm = 5300, strike_step = 50, strike_number = 6
+        -> [5000, 5050, 5100, 5150, 5200, 5250, 5300, 5350, 5400, 5450, 5500, 5550, 5600]
+    """
+    strikes = []
+    for i in range(-strike_number, strike_number + 1):
+        strike = atm + (i * strike_step)
+        strikes.append(strike)
+    return strikes
+
+
+def get_ltp(kite: KiteConnect, exchange: str, symbol: str) -> float:
+    """
+    Get Last Traded Price (LTP) for a symbol.
+    
+    Args:
+        kite: KiteConnect client instance
+        exchange: Exchange name (e.g., "MCX", "NFO")
+        symbol: Trading symbol
+    
+    Returns:
+        LTP as float, or None if not found
+    """
+    try:
+        # Format: exchange:tradingsymbol
+        instrument_id = f"{exchange}:{symbol}"
+        quote_data = kite.quote(instrument_id)
+        
+        if instrument_id in quote_data:
+            ltp = quote_data[instrument_id].get('last_price', None)
+            if ltp:
+                return float(ltp)
+        
+        # Alternative: Try ltp() method
+        ltp_data = kite.ltp(instrument_id)
+        if instrument_id in ltp_data:
+            ltp = ltp_data[instrument_id].get('last_price', None)
+            if ltp:
+                return float(ltp)
+        
+        print(f"[LTP] Could not get LTP for {symbol} on {exchange}")
+        return None
+        
+    except Exception as e:
+        print(f"[LTP] Error getting LTP for {symbol}: {str(e)}")
+        return None
+
+
+def calculate_delta_black_scholes(
+    S: float,  # Current stock price
+    K: float,  # Strike price
+    T: float,  # Time to expiration (in years)
+    r: float,  # Risk-free interest rate (e.g., 0.06 for 6%)
+    sigma: float,  # Volatility (implied volatility)
+    option_type: str  # 'CE' for call, 'PE' for put
+) -> float:
+    """
+    Calculate option delta using Black-Scholes model.
+    
+    Libraries Used:
+    - scipy.stats.norm: For cumulative distribution function N(d1)
+    - math.log, math.sqrt: For logarithmic and square root calculations
+    
+    Formula:
+    - d1 = [ln(S/K) + (r + σ²/2) * T] / (σ * √T)
+    - Call Delta = N(d1)
+    - Put Delta = N(d1) - 1
+    
+    Args:
+        S: Current stock price (LTP)
+        K: Strike price
+        T: Time to expiration in years
+        r: Risk-free interest rate (default: 0.06 for 6%)
+        sigma: Implied volatility (as decimal, e.g., 0.20 for 20%)
+        option_type: 'CE' for Call, 'PE' for Put
+    
+    Returns:
+        Delta value (0 to 1 for calls, -1 to 0 for puts)
+    """
+    try:
+        if T <= 0:
+            # If expired, delta is 1 for ITM calls, 0 for OTM calls
+            if option_type == 'CE':
+                return 1.0 if S > K else 0.0
+            else:  # PE
+                return -1.0 if S < K else 0.0
+        
+        if sigma <= 0:
+            # If no volatility, use simple ITM/OTM logic
+            if option_type == 'CE':
+                return 1.0 if S > K else 0.0
+            else:  # PE
+                return -1.0 if S < K else 0.0
+        
+        # Calculate d1
+        d1 = (log(S / K) + (r + (sigma ** 2) / 2) * T) / (sigma * sqrt(T))
+        
+        # Calculate delta
+        if option_type == 'CE':
+            delta = norm.cdf(d1)  # N(d1) for calls
+        else:  # PE
+            delta = norm.cdf(d1) - 1  # N(d1) - 1 for puts
+        
+        return delta
+        
+    except Exception as e:
+        print(f"[Delta] Error calculating delta: {str(e)}")
+        # Fallback: simple ITM/OTM logic
+        if option_type == 'CE':
+            return 1.0 if S > K else 0.0
+        else:  # PE
+            return -1.0 if S < K else 0.0
+
+
+def construct_option_symbol(symbol: str, expiry: str, strike: int, option_type: str) -> str:
+    """
+    Construct option symbol for Zerodha.
+    
+    Format: {SYMBOL}{YEAR}{MONTH}{STRIKE}{CE/PE}
+    Example: CRUDEOIL + 19-11-2025 + 5300 + CE -> CRUDEOIL25NOV5300CE
+    
+    Args:
+        symbol: Base symbol (e.g., "CRUDEOIL")
+        expiry: Expiry date in format "DD-MM-YYYY" (e.g., "19-11-2025")
+        strike: Strike price (e.g., 5300)
+        option_type: 'CE' for Call, 'PE' for Put
+    
+    Returns:
+        Option symbol string
+    """
+    try:
+        # Parse expiry date
+        expiry_parts = expiry.split('-')
+        if len(expiry_parts) != 3:
+            raise ValueError(f"Invalid expiry format: {expiry}. Expected DD-MM-YYYY")
+        
+        day = expiry_parts[0]
+        month = int(expiry_parts[1])
+        year = int(expiry_parts[2])
+        
+        # Get last 2 digits of year
+        year_short = str(year)[-2:]
+        
+        # Month abbreviations
+        month_map = {
+            1: 'JAN', 2: 'FEB', 3: 'MAR', 4: 'APR', 5: 'MAY', 6: 'JUN',
+            7: 'JUL', 8: 'AUG', 9: 'SEP', 10: 'OCT', 11: 'NOV', 12: 'DEC'
+        }
+        
+        if month not in month_map:
+            raise ValueError(f"Invalid month: {month}")
+        
+        month_abbr = month_map[month]
+        
+        # Construct option symbol: {SYMBOL}{YEAR}{MONTH}{STRIKE}{CE/PE}
+        option_symbol = f"{symbol}{year_short}{month_abbr}{strike}{option_type}"
+        
+        return option_symbol
+        
+    except Exception as e:
+        raise Exception(f"Error constructing option symbol: {str(e)}")
+
+
+def get_option_quote(kite: KiteConnect, exchange: str, option_symbol: str) -> dict:
+    """
+    Get option quote data including IV (Implied Volatility) if available.
+    
+    Args:
+        kite: KiteConnect client instance
+        exchange: Exchange name (e.g., "NFO", "MCX")
+        option_symbol: Option trading symbol
+    
+    Returns:
+        Dictionary with quote data including 'last_price', 'iv' (if available), etc.
+    """
+    try:
+        instrument_id = f"{exchange}:{option_symbol}"
+        quote_data = kite.quote(instrument_id)
+        
+        if instrument_id in quote_data:
+            return quote_data[instrument_id]
+        
+        return {}
+        
+    except Exception as e:
+        print(f"[Option Quote] Error getting quote for {option_symbol}: {str(e)}")
+        return {}
+
+
+def find_exchange_for_symbol(kite: KiteConnect, symbol: str) -> str:
+    """
+    Find the exchange where a symbol is traded.
+    
+    Args:
+        kite: KiteConnect client instance
+        symbol: Trading symbol
+    
+    Returns:
+        Exchange name (e.g., "MCX", "NFO", "NSE"), or None if not found
+    """
+    exchanges_to_try = ["MCX", "NFO", "NSE", "BSE"]
+    for exchange in exchanges_to_try:
+        try:
+            token = get_instrument_token(kite, exchange, symbol)
+            if token:
+                return exchange
+        except Exception:
+            continue
+    return None
+
+
+def find_option_with_max_delta(
+    kite: KiteConnect,
+    symbol: str,
+    expiry: str,
+    exchange: str,
+    strikes: list,
+    ltp: float,
+    option_type: str,
+    risk_free_rate: float = 0.06
+) -> dict:
+    """
+    Find the option with maximum delta among given strikes.
+    
+    Args:
+        kite: KiteConnect client instance
+        symbol: Base symbol (e.g., "CRUDEOIL")
+        expiry: Expiry date in format "DD-MM-YYYY"
+        exchange: Exchange name (e.g., "NFO", "MCX")
+        strikes: List of strike prices to check
+        ltp: Last Traded Price of underlying
+        option_type: 'CE' for Call, 'PE' for Put
+        risk_free_rate: Risk-free interest rate (default: 0.06 for 6%)
+    
+    Returns:
+        Dictionary with 'strike', 'delta', 'option_symbol', 'iv', 'ltp', etc.
+    """
+    try:
+        # Calculate time to expiration
+        expiry_date = datetime.strptime(expiry, "%d-%m-%Y")
+        current_date = datetime.now()
+        time_to_expiry = (expiry_date - current_date).total_seconds() / (365.25 * 24 * 3600)  # Convert to years
+        
+        if time_to_expiry <= 0:
+            print(f"[Max Delta] Option expired for {symbol}")
+            return None
+        
+        max_delta = -float('inf') if option_type == 'PE' else -1.0
+        best_option = None
+        
+        # Store all strike deltas for printing
+        all_strike_data = []
+        
+        print(f"\n{'='*80}")
+        print(f"[DELTA CALCULATION] Finding {option_type} option with max delta")
+        print(f"Underlying: {symbol} | LTP: {ltp:.2f} | ATM: {normalize_strike(ltp, 50):.0f}")
+        print(f"Time to Expiry: {time_to_expiry:.4f} years | Risk-free Rate: {risk_free_rate*100:.2f}%")
+        print(f"{'='*80}")
+        print(f"{'Strike':<10} {'Option Symbol':<25} {'Delta':<12} {'IV':<10} {'LTP':<12} {'Status':<15}")
+        print(f"{'-'*80}")
+        
+        for strike in strikes:
+            try:
+                # Construct option symbol
+                option_symbol = construct_option_symbol(symbol, expiry, strike, option_type)
+                
+                # Get option quote
+                quote = get_option_quote(kite, exchange, option_symbol)
+                
+                # Get IV from quote (if available)
+                iv = quote.get('iv', None)
+                iv_source = "API"
+                if iv is None:
+                    # If IV not available, try to estimate from historical volatility
+                    # For now, use a default IV of 20% if not available
+                    iv = 0.20
+                    iv_source = "Default"
+                else:
+                    # Convert IV from percentage to decimal if needed
+                    if iv > 1:
+                        iv = iv / 100.0
+                
+                # Calculate delta using Black-Scholes model
+                # Libraries used: scipy.stats.norm for N(d1), math for log/sqrt
+                delta = calculate_delta_black_scholes(
+                    S=ltp,
+                    K=float(strike),
+                    T=time_to_expiry,
+                    r=risk_free_rate,
+                    sigma=iv,
+                    option_type=option_type
+                )
+                
+                option_ltp = quote.get('last_price', 'N/A')
+                if option_ltp != 'N/A':
+                    option_ltp = f"{option_ltp:.2f}"
+                
+                # Store strike data
+                strike_data = {
+                    'strike': strike,
+                    'delta': delta,
+                    'option_symbol': option_symbol,
+                    'iv': iv,
+                    'iv_source': iv_source,
+                    'ltp': option_ltp,
+                    'time_to_expiry': time_to_expiry
+                }
+                all_strike_data.append(strike_data)
+                
+                # Determine if this is currently the best
+                is_best = False
+                if option_type == 'PE':
+                    # For puts, delta is negative, so we compare absolute values
+                    if abs(delta) > abs(max_delta):
+                        max_delta = delta
+                        best_option = strike_data
+                        is_best = True
+                else:  # CE
+                    if delta > max_delta:
+                        max_delta = delta
+                        best_option = strike_data
+                        is_best = True
+                
+                # Print strike data with indicator if it's the best
+                status = "✓ SELECTED" if is_best else ""
+                print(f"{strike:<10} {option_symbol:<25} {delta:>11.4f}  {iv*100:>8.2f}%  {option_ltp:>12}  {status:<15}")
+                
+            except Exception as e:
+                print(f"{strike:<10} {'ERROR':<25} {'N/A':<12} {'N/A':<10} {'N/A':<12} {str(e)[:15]:<15}")
+                print(f"[Max Delta] Error processing strike {strike}: {str(e)}")
+                continue
+        
+        print(f"{'-'*80}")
+        
+        # Print summary
+        if best_option:
+            print(f"\n[SELECTED OPTION]")
+            print(f"  Strike: {best_option['strike']}")
+            print(f"  Option Symbol: {best_option['option_symbol']}")
+            print(f"  Delta: {best_option['delta']:.6f} ({'Highest' if option_type == 'CE' else 'Highest Absolute'})")
+            print(f"  IV: {best_option['iv']*100:.2f}% (Source: {best_option['iv_source']})")
+            print(f"  Option LTP: {best_option['ltp']}")
+            print(f"  Time to Expiry: {best_option['time_to_expiry']:.4f} years")
+        else:
+            print(f"\n[WARNING] No valid option found with max delta")
+        
+        print(f"{'='*80}\n")
+        
+        return best_option
+        
+    except Exception as e:
+        print(f"[Max Delta] Error finding option with max delta: {str(e)}")
+        traceback.print_exc()
+        return None
+
+
 def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, future_symbol: str, trading_state: dict):
     """
     Execute trading strategy based on Heikin-Ashi candles, Keltner Channels, Supertrend, and Volume.
@@ -865,17 +1253,21 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
     1. Armed Buy: HA candle low <= both lower Keltner bands (KC1_lower AND KC2_lower)
     2. Buy Entry: Once armed, when HA candle close > both lower Keltner bands AND volume > VolumeMA
     3. Buy Exit: Supertrend changes from green (trend=1) to red (trend=-1)
-    4. Armed Buy Reset: Reset when candle's high > both upper Keltner bands
+    4. Armed Buy Reset: Reset ONLY when candle's high > both upper Keltner bands
+    5. Re-entry: After exit, if still armed AND entry conditions met, can re-enter immediately
     
     SELL:
     1. Armed Sell: HA candle high >= both upper Keltner bands (KC1_upper AND KC2_upper)
     2. Sell Entry: Once armed, when HA candle close < both upper Keltner bands AND volume > VolumeMA
     3. Sell Exit: Supertrend changes from red (trend=-1) to green (trend=1)
-    4. Armed Sell Reset: Reset when candle's low < both lower Keltner bands
+    4. Armed Sell Reset: Reset ONLY when candle's low < both lower Keltner bands
+    5. Re-entry: After exit, if still armed AND entry conditions met, can re-enter immediately
     
     Position Management:
     - One position at a time
-    - No entry on same candle as exit
+    - No entry on same candle as exit (prevents immediate re-entry on exit candle)
+    - Armed state remains active after entry (allows re-entry after exit if still armed)
+    - Armed state resets only when opposite condition occurs
     - All conditions evaluated on candle close
     """
     try:
@@ -1030,11 +1422,65 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
             if trading_state.get('armed_buy', False):
                 if ha_close > kc1_lower and ha_close > kc2_lower:
                     if volume_ma is not None and volume > volume_ma:
+                        # Get settings for delta-based option selection
+                        params = result_dict.get(unique_key, {})
+                        strike_step = int(params.get('StrikeStep', 50))
+                        strike_number = int(params.get('StrikeNumber', 6))
+                        expiry = params.get('Expiry', '')
+                        
+                        # Find exchange and get LTP for underlying
+                        underlying_exchange = find_exchange_for_symbol(kite_client, symbol)
+                        if not underlying_exchange:
+                            # Try future symbol
+                            underlying_exchange = find_exchange_for_symbol(kite_client, future_symbol)
+                        
+                        option_exchange = "NFO"  # Options are typically on NFO
+                        if underlying_exchange == "MCX":
+                            option_exchange = "MCX"  # MCX commodities have options on MCX
+                        
+                        # Get LTP for underlying
+                        ltp = None
+                        if underlying_exchange:
+                            ltp = get_ltp(kite_client, underlying_exchange, symbol)
+                            if not ltp:
+                                ltp = get_ltp(kite_client, underlying_exchange, future_symbol)
+                        
+                        # If LTP not available, use ha_close as approximation
+                        if not ltp:
+                            ltp = ha_close
+                            print(f"[Buy Entry] LTP not available, using HA_Close: {ltp:.2f}")
+                        
+                        # Normalize strike and create strike list
+                        atm = normalize_strike(ltp, strike_step)
+                        all_strikes = create_strike_list(atm, strike_step, strike_number)
+                        
+                        # For BUY: Find max delta CALL option from strikes below ATM (including ATM)
+                        # Strikes: [5000, 5050, 5100, 5150, 5200, 5250, 5300] for ATM=5300
+                        buy_strikes = [s for s in all_strikes if s <= atm]
+                        
+                        selected_option = None
+                        if kite_client and expiry and buy_strikes:
+                            try:
+                                selected_option = find_option_with_max_delta(
+                                    kite=kite_client,
+                                    symbol=symbol,
+                                    expiry=expiry,
+                                    exchange=option_exchange,
+                                    strikes=buy_strikes,
+                                    ltp=ltp,
+                                    option_type='CE',  # Call option for buy
+                                    risk_free_rate=0.06
+                                )
+                            except Exception as e:
+                                print(f"[Buy Entry] Error finding option with max delta: {str(e)}")
+                                traceback.print_exc()
+                        
                         # Take buy position
                         trading_state['position'] = 'BUY'
-                        trading_state['armed_buy'] = False  # Reset armed state after entry
+                        # Keep armed_buy = True to allow re-entry after exit if conditions still met
                         save_trading_state()  # Save state after position change
                         
+                        # Build log message
                         log_msg = (
                             f"BUY ENTRY | Symbol: {future_symbol} | "
                             f"Price: {ha_close:.2f} | Volume: {volume:.0f} > VolumeMA: {volume_ma:.0f} | "
@@ -1044,6 +1490,17 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                             f"KC2_Upper: {kc2_upper:.2f} | KC2_Lower: {kc2_lower:.2f} | "
                             f"Supertrend: {supertrend_trend} | Supertrend_Value: {supertrend:.2f}"
                         )
+                        
+                        # Add option selection details if available
+                        if selected_option:
+                            log_msg += (
+                                f" | Selected Option: {selected_option['option_symbol']} | "
+                                f"Strike: {selected_option['strike']} | Delta: {selected_option['delta']:.4f} | "
+                                f"IV: {selected_option['iv']:.4f} | LTP: {selected_option.get('ltp', 'N/A')}"
+                            )
+                        else:
+                            log_msg += " | Option Selection: Failed or not available"
+                        
                         write_to_order_logs(log_msg)
             
             # ========== SELL ENTRY ==========
@@ -1051,11 +1508,65 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
             if trading_state.get('armed_sell', False):
                 if ha_close < kc1_upper and ha_close < kc2_upper:
                     if volume_ma is not None and volume > volume_ma:
+                        # Get settings for delta-based option selection
+                        params = result_dict.get(unique_key, {})
+                        strike_step = int(params.get('StrikeStep', 50))
+                        strike_number = int(params.get('StrikeNumber', 6))
+                        expiry = params.get('Expiry', '')
+                        
+                        # Find exchange and get LTP for underlying
+                        underlying_exchange = find_exchange_for_symbol(kite_client, symbol)
+                        if not underlying_exchange:
+                            # Try future symbol
+                            underlying_exchange = find_exchange_for_symbol(kite_client, future_symbol)
+                        
+                        option_exchange = "NFO"  # Options are typically on NFO
+                        if underlying_exchange == "MCX":
+                            option_exchange = "MCX"  # MCX commodities have options on MCX
+                        
+                        # Get LTP for underlying
+                        ltp = None
+                        if underlying_exchange:
+                            ltp = get_ltp(kite_client, underlying_exchange, symbol)
+                            if not ltp:
+                                ltp = get_ltp(kite_client, underlying_exchange, future_symbol)
+                        
+                        # If LTP not available, use ha_close as approximation
+                        if not ltp:
+                            ltp = ha_close
+                            print(f"[Sell Entry] LTP not available, using HA_Close: {ltp:.2f}")
+                        
+                        # Normalize strike and create strike list
+                        atm = normalize_strike(ltp, strike_step)
+                        all_strikes = create_strike_list(atm, strike_step, strike_number)
+                        
+                        # For SELL: Find max delta PUT option from strikes above ATM (including ATM)
+                        # Strikes: [5300, 5350, 5400, 5450, 5500, 5550, 5600] for ATM=5300
+                        sell_strikes = [s for s in all_strikes if s >= atm]
+                        
+                        selected_option = None
+                        if kite_client and expiry and sell_strikes:
+                            try:
+                                selected_option = find_option_with_max_delta(
+                                    kite=kite_client,
+                                    symbol=symbol,
+                                    expiry=expiry,
+                                    exchange=option_exchange,
+                                    strikes=sell_strikes,
+                                    ltp=ltp,
+                                    option_type='PE',  # Put option for sell
+                                    risk_free_rate=0.06
+                                )
+                            except Exception as e:
+                                print(f"[Sell Entry] Error finding option with max delta: {str(e)}")
+                                traceback.print_exc()
+                        
                         # Take sell position
                         trading_state['position'] = 'SELL'
-                        trading_state['armed_sell'] = False  # Reset armed state after entry
+                        # Keep armed_sell = True to allow re-entry after exit if conditions still met
                         save_trading_state()  # Save state after position change
                         
+                        # Build log message
                         log_msg = (
                             f"SELL ENTRY | Symbol: {future_symbol} | "
                             f"Price: {ha_close:.2f} | Volume: {volume:.0f} > VolumeMA: {volume_ma:.0f} | "
@@ -1065,6 +1576,17 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                             f"KC2_Upper: {kc2_upper:.2f} | KC2_Lower: {kc2_lower:.2f} | "
                             f"Supertrend: {supertrend_trend} | Supertrend_Value: {supertrend:.2f}"
                         )
+                        
+                        # Add option selection details if available
+                        if selected_option:
+                            log_msg += (
+                                f" | Selected Option: {selected_option['option_symbol']} | "
+                                f"Strike: {selected_option['strike']} | Delta: {selected_option['delta']:.4f} | "
+                                f"IV: {selected_option['iv']:.4f} | LTP: {selected_option.get('ltp', 'N/A')}"
+                            )
+                        else:
+                            log_msg += " | Option Selection: Failed or not available"
+                        
                         write_to_order_logs(log_msg)
         
     except Exception as e:

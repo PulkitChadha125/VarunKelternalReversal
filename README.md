@@ -23,6 +23,8 @@ An automated trading bot for Zerodha that implements a Keltner Channel reversal 
   - Keltner Channel (2 sets: KC1 and KC2)
   - Supertrend indicator
   - Volume Moving Average
+- **Delta-Based Option Selection**: Automatically selects options with maximum delta for optimal entry
+- **Re-entry Logic**: Can re-enter trades after exit if armed state is still active
 - **State Persistence**: Saves trading state to `state.json` for recovery after restart
 - **Auto-Login**: Automatic login at 9:00 AM daily
 - **Rate Limit Handling**: Automatically handles "too many requests" errors with re-login
@@ -46,14 +48,17 @@ The bot implements a **Keltner Channel Reversal Strategy** that identifies poten
 2. **Buy Entry**:
    - Once armed, when Heikin-Ashi candle close > both lower Keltner bands (KC1_lower AND KC2_lower)
    - AND volume > VolumeMA (29-period moving average)
-   - Take BUY position
+   - Take BUY position with CALL option (selected based on maximum delta)
+   - **Armed state remains active** after entry (allows re-entry after exit)
 
 3. **Buy Exit**:
    - Supertrend changes from GREEN (trend=1, uptrend) to RED (trend=-1, downtrend)
    - Exit the BUY position
+   - If still armed, can re-enter on next candle if entry conditions are met
 
 4. **Armed Buy Reset**:
-   - Reset armed buy status when candle's high > both upper Keltner bands (KC1_upper AND KC2_upper)
+   - Reset armed buy status **ONLY** when candle's high > both upper Keltner bands (KC1_upper AND KC2_upper)
+   - Armed state does NOT reset when trade is taken
 
 #### SELL Conditions
 
@@ -64,21 +69,56 @@ The bot implements a **Keltner Channel Reversal Strategy** that identifies poten
 2. **Sell Entry**:
    - Once armed, when Heikin-Ashi candle close < both upper Keltner bands (KC1_upper AND KC2_upper)
    - AND volume > VolumeMA (29-period moving average)
-   - Take SELL position
+   - Take SELL position with PUT option (selected based on maximum delta)
+   - **Armed state remains active** after entry (allows re-entry after exit)
 
 3. **Sell Exit**:
    - Supertrend changes from RED (trend=-1, downtrend) to GREEN (trend=1, uptrend)
    - Exit the SELL position
+   - If still armed, can re-enter on next candle if entry conditions are met
 
 4. **Armed Sell Reset**:
-   - Reset armed sell status when candle's low < both lower Keltner bands (KC1_lower AND KC2_lower)
+   - Reset armed sell status **ONLY** when candle's low < both lower Keltner bands (KC1_lower AND KC2_lower)
+   - Armed state does NOT reset when trade is taken
 
 ### Position Management Rules
 
 - **One Position at a Time**: Only one position (BUY or SELL) can be active at any given time
 - **No Entry on Exit Candle**: Cannot enter a new position on the same candle where an exit occurred
+- **Re-entry After Exit**: If armed state is still active after exit, can re-enter on next candle if entry conditions are met
+- **Armed State Persistence**: Armed state remains active after entry (does not reset automatically)
+- **Armed State Reset**: Armed state resets only when opposite condition occurs (not when trade is taken)
 - **All Conditions on Candle Close**: All conditions are evaluated when a candle closes
 - **Volume Confirmation**: Entry requires volume to be above the Volume Moving Average
+
+### Option Selection Strategy
+
+When a BUY or SELL signal is triggered:
+
+1. **Strike Normalization**: 
+   - Gets LTP (Last Traded Price) of underlying
+   - Normalizes to nearest ATM strike based on strike step
+   - Example: LTP = 5319, StrikeStep = 50 → ATM = 5300
+
+2. **Strike List Creation**:
+   - Creates list of strikes around ATM
+   - Example: [5000, 5050, 5100, 5150, 5200, 5250, 5300, 5350, 5400, 5450, 5500, 5550, 5600]
+
+3. **Delta Calculation**:
+   - For BUY: Calculates delta for CALL options from strikes ≤ ATM
+   - For SELL: Calculates delta for PUT options from strikes ≥ ATM
+   - Uses Black-Scholes model with Implied Volatility (IV) from option quotes
+
+4. **Option Selection**:
+   - Selects option with **maximum delta** (highest sensitivity to price movement)
+   - For CALLs: Highest positive delta
+   - For PUTs: Highest absolute delta (most negative)
+
+5. **Delta Calculation Libraries**:
+   - **scipy.stats.norm**: For cumulative distribution function N(d1)
+   - **math**: For logarithmic and square root calculations
+   - Formula: d1 = [ln(S/K) + (r + σ²/2) × T] / (σ × √T)
+   - Call Delta = N(d1), Put Delta = N(d1) - 1
 
 ## 📦 Dependencies
 
@@ -91,6 +131,10 @@ pyotp>=2.9.0
 pandas>=2.0.0
 polars>=0.19.0
 polars-talib>=0.1.0
+scipy>=1.10.0
+numpy>=1.24.0
+pyarrow
+setuptools
 ```
 
 ### System Requirements
@@ -186,9 +230,9 @@ CRUDEOIL,19-11-2025,5minute,50,6,1,29,10,3.0,50,2.0,14,50,2.0,12
 - `Symbol`: Base symbol (e.g., CRUDEOIL)
 - `Expiery`: Expiry date in DD-MM-YYYY format
 - `Timeframe`: Candle timeframe (e.g., 5minute, 15minute, 1hour)
-- `StrikeStep`: Strike step for options (not used in current strategy)
-- `StrikeNumber`: Strike number (not used in current strategy)
-- `Lotsize`: Lot size (not used in current strategy)
+- `StrikeStep`: Strike step for options (e.g., 50) - used for strike normalization
+- `StrikeNumber`: Number of strikes on each side of ATM (e.g., 6) - used for strike list creation
+- `Lotsize`: Lot size for trading (future use)
 - `VolumeMa`: Volume Moving Average period (default: 29)
 - `SupertrendPeriod`: Supertrend ATR period (default: 10)
 - `SupertrendMul`: Supertrend multiplier (default: 3.0)
@@ -255,10 +299,12 @@ CRUDEOIL,19-11-2025,5minute,50,6,1,29,10,3.0,50,2.0,14,50,2.0,12
 
 ### Armed Conditions
 
-| Condition | Trigger | Reset |
-|-----------|---------|-------|
-| **Armed Buy** | HA Low ≤ Both Lower KC Bands | HA High > Both Upper KC Bands |
-| **Armed Sell** | HA High ≥ Both Upper KC Bands | HA Low < Both Lower KC Bands |
+| Condition | Trigger | Reset | Notes |
+|-----------|---------|-------|-------|
+| **Armed Buy** | HA Low ≤ Both Lower KC Bands | HA High > Both Upper KC Bands | Remains active after entry (allows re-entry) |
+| **Armed Sell** | HA High ≥ Both Upper KC Bands | HA Low < Both Lower KC Bands | Remains active after entry (allows re-entry) |
+
+**Important**: Armed state does NOT reset when a trade is taken. It only resets when the opposite condition occurs.
 
 ## 💾 State Management
 
@@ -270,14 +316,19 @@ The bot automatically saves trading state to `state.json` after:
 
 **State includes:**
 - Current position (BUY/SELL/None) for each symbol
-- Armed status (armed_buy, armed_sell)
+- Armed status (armed_buy, armed_sell) - persists after entry
 - Exit flags
 - Last exit candle date
 
 **On restart**, the bot automatically loads the previous state, so it knows:
 - Which positions are currently open
-- Which symbols are armed
+- Which symbols are armed (can re-enter if conditions met)
 - Previous exit information
+
+**Re-entry Behavior**:
+- If a position exits via Supertrend and armed state is still active
+- On the next candle (not exit candle), if entry conditions are met, will re-enter automatically
+- This allows multiple entries during a strong trend while armed
 
 ## 🔄 Error Handling
 
@@ -305,10 +356,20 @@ If "Too many requests" error occurs:
 All trading events are logged to `OrderLog.txt` with timestamps:
 
 - **ARMED BUY/SELL**: When armed conditions are met
-- **ARMED RESET**: When armed conditions are reset
-- **BUY/SELL ENTRY**: When positions are entered
+- **ARMED RESET**: When armed conditions are reset (opposite condition)
+- **BUY/SELL ENTRY**: When positions are entered (includes selected option details with delta)
 - **EXIT BUY/SELL**: When positions are exited
+- **DELTA CALCULATION**: Detailed table showing all strike deltas and selected option
 - **ERRORS**: Any errors or re-login events
+
+**Delta Calculation Logging**:
+When a signal is triggered, the bot prints a detailed table showing:
+- All strikes being evaluated
+- Option symbol for each strike
+- Delta value for each strike
+- Implied Volatility (IV) for each strike
+- Option LTP (Last Traded Price)
+- Which option was selected (marked with ✓ SELECTED)
 
 ## ⚠️ Important Notes
 

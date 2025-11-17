@@ -1,0 +1,2 @@
+[2025-11-17 15:50:01] ARMED SELL | Symbol: CRUDEOIL25NOVFUT | HA_High: 5336.00 >= KC1_Upper: 5322.54 AND KC2_Upper: 5335.91 | HA_Close: 5327.75 | Volume: 491
+[2025-11-17 15:55:01] SELL ENTRY | Symbol: CRUDEOIL25NOVFUT | Price: 5320.00 | Volume: 140 > VolumeMA: 83 | HA_Close: 5320.00 < KC1_Upper: 5324.13 AND KC2_Upper: 5337.60 | HA_High: 5327.00 | HA_Low: 5314.00 | KC1_Upper: 5324.13 | KC1_Lower: 5260.23 | KC2_Upper: 5337.60 | KC2_Lower: 5246.75 | Supertrend: -1.0 | Supertrend_Value: 5436.63
