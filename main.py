@@ -1226,16 +1226,17 @@ def find_option_with_max_delta(
             return None
         
         # Initialize max_delta based on option type
-        # For PUT: start with 0 (we want highest absolute delta, i.e., most negative)
-        # For CALL: start with -1 (we want highest positive delta)
-        max_delta = 0.0 if option_type == 'PE' else -1.0
+        # For PUT: start with -1.0 (we want highest delta up to -0.80, so start with very negative)
+        # For CALL: start with -1.0 (we want highest delta up to 0.80, so start with very negative)
+        # Delta cap: 0.80 for CALLs, -0.80 for PUTs
+        max_delta = -1.0  # Start with very negative value for both types
         best_option = None
         
         # Store all strike deltas for printing
         all_strike_data = []
         
         print(f"\n{'='*80}")
-        print(f"[DELTA CALCULATION] Finding {option_type} option with max delta")
+        print(f"[DELTA CALCULATION] Finding {option_type} option with max delta (capped at {'0.80' if option_type == 'CE' else '-0.80'})")
         print(f"Underlying: {symbol} | LTP: {ltp:.2f} | ATM: {normalize_strike(ltp, 50):.0f}")
         print(f"Time to Expiry: {time_to_expiry:.4f} years | Risk-free Rate: {risk_free_rate*100:.2f}%")
         print(f"{'='*80}")
@@ -1387,18 +1388,28 @@ def find_option_with_max_delta(
                 all_strike_data.append(strike_data)
                 
                 # Determine if this is currently the best
+                # Cap delta selection at 0.80 (or -0.80 for PUTs)
+                MAX_DELTA_CAP = 0.80
+                MIN_DELTA_CAP = -0.80  # For PUTs
+                
                 is_best = False
                 if option_type == 'PE':
-                    # For puts, delta is negative, so we compare absolute values
-                    if abs(delta) > abs(max_delta):
-                        max_delta = delta
-                        best_option = strike_data
-                        is_best = True
+                    # For puts, delta is negative
+                    # Select maximum delta up to -0.80 (not more negative than -0.80)
+                    # We want the highest delta (least negative) that is >= -0.80
+                    if delta >= MIN_DELTA_CAP:  # Only consider deltas >= -0.80
+                        if delta > max_delta:  # For negative values, > means less negative (higher)
+                            max_delta = delta
+                            best_option = strike_data
+                            is_best = True
                 else:  # CE
-                    if delta > max_delta:
-                        max_delta = delta
-                        best_option = strike_data
-                        is_best = True
+                    # For calls, delta is positive
+                    # Select maximum delta up to 0.80 (not more than 0.80)
+                    if delta <= MAX_DELTA_CAP:  # Only consider deltas <= 0.80
+                        if delta > max_delta:
+                            max_delta = delta
+                            best_option = strike_data
+                            is_best = True
                 
                 # Print strike data with indicator if it's the best
                 status = "✓ SELECTED" if is_best else ""
@@ -1413,15 +1424,16 @@ def find_option_with_max_delta(
         
         # Print summary
         if best_option:
+            delta_cap_info = f" (Capped at {'0.80' if option_type == 'CE' else '-0.80'})"
             print(f"\n[SELECTED OPTION]")
             print(f"  Strike: {best_option['strike']}")
             print(f"  Option Symbol: {best_option['option_symbol']}")
-            print(f"  Delta: {best_option['delta']:.6f} ({'Highest' if option_type == 'CE' else 'Highest Absolute'})")
+            print(f"  Delta: {best_option['delta']:.6f}{delta_cap_info}")
             print(f"  IV: {best_option['iv']*100:.2f}% (Source: {best_option['iv_source']})")
             print(f"  Option LTP: {best_option['ltp']}")
             print(f"  Time to Expiry: {best_option['time_to_expiry']:.4f} years")
         else:
-            print(f"\n[WARNING] No valid option found with max delta")
+            print(f"\n[WARNING] No valid option found with max delta (within cap of {'0.80' if option_type == 'CE' else '-0.80'})")
         
         print(f"{'='*80}\n")
         

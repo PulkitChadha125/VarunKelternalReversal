@@ -1,28 +1,336 @@
-ltp = 5319
+================================================================================
+APPLICATION FLOW - KELTNER CHANNEL REVERSAL STRATEGY
+================================================================================
+
+IMPORTANT DEFINITIONS:
+- KC1 = Outer Band (wider channel)
+- KC2 = Inner Band (narrower channel)
+- All decisions (entry, exit, arm) are evaluated on CANDLE CLOSE only
+
+================================================================================
+1. INITIALIZATION PHASE
+================================================================================
+
+Start Application
+    ↓
+Load Trading State (state.json) - Restores previous positions and armed states
+    ↓
+Zerodha Login (zerodha_login()) - Authenticate with Zerodha API
+    ↓
+Load Trading Settings (TradeSettings.csv) - Load symbols and parameters
+    ↓
+Calculate Timeframe (from settings) - Get candle interval (e.g., 5minute)
+    ↓
+Enter Main Loop
+
+================================================================================
+2. MAIN EXECUTION LOOP
+================================================================================
+
+Main Loop (Continuous)
+    ↓
+Check Time:
+    - If 9:00 AM → Auto-login (refresh session)
+    - Calculate next candle close time
+    ↓
+Wait Until Next Candle Close
+    ↓
+Execute Strategy (main_strategy())
+    ↓
+Save Trading State (state.json)
+    ↓
+Repeat
+
+================================================================================
+3. STRATEGY EXECUTION FLOW (Per Symbol)
+================================================================================
+
+For Each Symbol in TradeSettings:
+    ↓
+Fetch Historical Data (last 10 days)
+    ↓
+Calculate Indicators:
+    - Heikin-Ashi Candles (HA_Open, HA_Close, HA_High, HA_Low)
+    - Keltner Channel 1 (Outer) - KC1_Upper, KC1_Lower
+    - Keltner Channel 2 (Inner) - KC2_Upper, KC2_Lower
+    - Supertrend (trend: 1=GREEN, -1=RED)
+    - Volume Moving Average (VolumeMA - 29 period)
+    ↓
+Execute Trading Strategy (execute_trading_strategy())
+    ↓
+[STRATEGY LOGIC - See Section 4]
+    ↓
+Display Trading Summary
+    ↓
+Next Symbol
+
+================================================================================
+4. TRADING STRATEGY LOGIC (On Candle Close)
+================================================================================
+
+STEP 1: CHECK EXIT CONDITIONS FIRST
+------------------------------------
+If Position = 'BUY':
+    If Supertrend changes: GREEN (1) → RED (-1)
+        → Place SELL order to exit CALL option
+        → Log: "ORDER EXITED: BUY position"
+        → Set Position = None
+        → Continue to check entry conditions (same candle)
+
+If Position = 'SELL':
+    If Supertrend changes: RED (-1) → GREEN (1)
+        → Place SELL order to exit PUT option
+        → Log: "ORDER EXITED: SELL position"
+        → Set Position = None
+        → Continue to check entry conditions (same candle)
 
 
-strike step =50
-atm=5300
+STEP 2: CHECK ARMED CONDITIONS
+--------------------------------
+ARMED BUY:
+    Condition: HA_Low < KC1_Lower (Outer Band)
+    Action: Set armed_buy = True
+    Log: "ARMED BUY | HA_Low < KC1_Lower (Outer)"
 
-BUY LEFT SIDE
-SELL RIGHT SIDE 
-strike list = [5000,5050,5100,5150,5200,5250,5300,5350,5400,5450,5500,5550,5600]
-
-delta = buy = ITM = CALL BUY  MAX DELTA = BUY CALL
-
-
-DELTA = SELL = ITM = PUT BUY MAX DELTA= BUY PUT
-
-
-
-flow of application is like this
-1. arm the buy  when candle low less than outer kc channel
-2. wait for another candle close to be above inner kc band and volume should be greater than volume ma 
-3. take the entry print the status (ireespective iorder was completed or rejected by broker) just print broker status 
-
-4. if high is less than higher kc outer band and position of buy is opened then we arm to sell do not open any sell position untill buy positon is exited by supertrend 
-
-5. once position is exited we check arm status is buy or sell and then check for entry conditon if arm is sell we see previous close is less than upper inner kc band and volume > volume ma, if it is buy  candle close to be above inner kc band and volume should be greater than volume ma
+ARMED SELL:
+    Condition: HA_High >= KC1_Upper (Outer Band)
+    Action: Set armed_sell = True
+    Note: Can be set even when BUY position exists
+    Log: "ARMED SELL | HA_High >= KC1_Upper (Outer)"
 
 
- 
+STEP 3: CHECK ENTRY CONDITIONS (Only if Position = None)
+---------------------------------------------------------
+BUY ENTRY:
+    Required:
+        1. armed_buy = True
+        2. HA_Close > KC2_Lower (Inner Band)
+        3. Volume > VolumeMA
+    Action:
+        → Select CALL option with maximum delta
+        → Place LIMIT order (price = option LTP)
+        → Set Position = 'BUY'
+        → Log: "BUY ENTRY | Order Status: PLACED/REJECTED"
+    Note: Position is set regardless of order success/failure
+
+SELL ENTRY:
+    Required:
+        1. armed_sell = True
+        2. HA_Close < KC2_Upper (Inner Band)
+        3. Volume > VolumeMA
+    Action:
+        → Select PUT option with maximum delta
+        → Place LIMIT order (price = option LTP)
+        → Set Position = 'SELL'
+        → Log: "SELL ENTRY | Order Status: PLACED/REJECTED"
+    Note: Position is set regardless of order success/failure
+
+ENTRY BLOCKED:
+    If Position exists (BUY or SELL):
+        → Entry conditions are silently skipped
+        → No log, no order
+        → Must exit position first
+
+
+STEP 4: AFTER EXIT - CHECK ENTRY (Same Candle)
+-----------------------------------------------
+After Position Exit:
+    If armed_sell = True:
+        Check: HA_Close < KC2_Upper (Inner) AND Volume > VolumeMA
+        → If true: SELL ENTRY (same candle)
+    
+    If armed_buy = True:
+        Check: HA_Close > KC2_Lower (Inner) AND Volume > VolumeMA
+        → If true: BUY ENTRY (same candle)
+
+
+STEP 5: ARMED RESET CONDITIONS
+-------------------------------
+ARMED BUY RESET:
+    Condition: HA_High > KC1_Upper AND HA_High > KC2_Upper
+    Action: Set armed_buy = False
+    Log: "ARMED BUY RESET"
+
+ARMED SELL RESET:
+    Condition: HA_Low < KC1_Lower AND HA_Low < KC2_Lower
+    Action: Set armed_sell = False
+    Log: "ARMED SELL RESET"
+
+================================================================================
+5. OPTION SELECTION FLOW
+================================================================================
+
+Entry Signal Triggered (BUY or SELL)
+    ↓
+Get Underlying LTP (Last Traded Price)
+    ↓
+Normalize to ATM Strike (based on StrikeStep)
+    Example: LTP = 5319, StrikeStep = 50 → ATM = 5300
+    ↓
+Create Strike List (ATM ± StrikeNumber strikes)
+    Example: [5000, 5050, ..., 5300, 5350, ..., 5600]
+    ↓
+For Each Strike:
+    ↓
+    Get Option Symbol (CALL for BUY, PUT for SELL)
+    ↓
+    Get Option LTP (Last Traded Price)
+    ↓
+    Calculate IV (Implied Volatility):
+        - Try py_vollib (real-time from market price)
+        - Fallback: API IV if available
+        - If fails: Skip this strike (no default IV)
+    ↓
+    Calculate Delta:
+        - Use py_vollib.black_scholes.greeks.analytical.delta
+        - Risk-free rate: 10% for MCX, 6% for NFO
+        - Fallback: Manual Black-Scholes if py_vollib fails
+    ↓
+    Store: strike, delta, iv, ltp, option_symbol
+    ↓
+Select Strike with Maximum Delta
+    ↓
+Return Selected Option Details
+
+================================================================================
+6. ORDER PLACEMENT FLOW
+================================================================================
+
+Option Selected with Max Delta
+    ↓
+Get Current Option LTP (Last Traded Price)
+    ↓
+Place LIMIT Order:
+    - Exchange: MCX or NFO
+    - Symbol: Selected option symbol
+    - Transaction: BUY (for entry)
+    - Order Type: LIMIT
+    - Price: Current Option LTP
+    - Quantity: From TradeSettings (Lotsize)
+    - Product: NRML (Positional)
+    ↓
+Order Response:
+    - If Success: Return order_id
+    - If Failure: Return None, log error
+    ↓
+Log Order Status:
+    - PLACED: "ORDER PLACED: BUY/SELL [symbol] | Order ID: [id]"
+    - REJECTED: "ORDER FAILED: BUY/SELL [symbol] | Error: [reason]"
+    ↓
+Set Position (regardless of order success/failure):
+    - trading_state['position'] = 'BUY' or 'SELL'
+    - trading_state['option_symbol'] = selected_option_symbol
+    - trading_state['option_exchange'] = exchange
+    - trading_state['option_order_id'] = order_id (if successful)
+    ↓
+Log Entry:
+    - "BUY ENTRY" or "SELL ENTRY"
+    - Includes: Order Status (PLACED/REJECTED)
+    - Includes: Rejection Reason (if rejected)
+    ↓
+Save Trading State
+
+================================================================================
+7. POSITION MANAGEMENT FLOW EXAMPLE
+================================================================================
+
+Scenario: BUY Position Lifecycle
+
+Initial State:
+    Position = None
+    armed_buy = False
+    armed_sell = False
+
+Candle 1:
+    HA_Low = 5200, KC1_Lower = 5250
+    → HA_Low (5200) < KC1_Lower (5250)
+    → ARMED BUY = True
+    → Log: "ARMED BUY"
+
+Candle 2:
+    HA_Close = 5280, KC2_Lower = 5270, Volume = 100, VolumeMA = 80
+    → armed_buy = True ✓
+    → HA_Close (5280) > KC2_Lower (5270) ✓
+    → Volume (100) > VolumeMA (80) ✓
+    → BUY ENTRY
+    → Select CALL option with max delta
+    → Place LIMIT order
+    → Position = 'BUY'
+    → Log: "BUY ENTRY | Order Status: PLACED"
+
+Candle 3:
+    HA_High = 5400, KC1_Upper = 5350
+    → HA_High (5400) >= KC1_Upper (5350)
+    → ARMED SELL = True (while BUY position active)
+    → Log: "ARMED SELL | Note: BUY position active"
+
+Candle 4:
+    HA_Close = 5320, KC2_Upper = 5330, Volume = 120, VolumeMA = 80
+    → armed_sell = True ✓
+    → HA_Close (5320) < KC2_Upper (5330) ✓
+    → Volume (120) > VolumeMA (80) ✓
+    → BUT Position = 'BUY' (exists)
+    → ENTRY BLOCKED (silently skip, no log)
+
+Candle 5:
+    Supertrend: GREEN (1) → RED (-1)
+    → BUY EXIT
+    → Place SELL order to exit CALL
+    → Position = None
+    → Log: "ORDER EXITED: BUY position"
+    → Same Candle: Check armed_sell = True
+    → HA_Close (5320) < KC2_Upper (5330) ✓
+    → Volume (120) > VolumeMA (80) ✓
+    → SELL ENTRY (same candle)
+    → Select PUT option with max delta
+    → Place LIMIT order
+    → Position = 'SELL'
+    → Log: "SELL ENTRY | Order Status: PLACED"
+
+================================================================================
+8. KEY RULES SUMMARY
+================================================================================
+
+BAND DEFINITIONS:
+- KC1 = Outer Band (wider channel) - Used for ARMED conditions
+- KC2 = Inner Band (narrower channel) - Used for ENTRY conditions
+
+ARMED CONDITIONS:
+- BUY Armed: HA_Low < KC1_Lower (Outer)
+- SELL Armed: HA_High >= KC1_Upper (Outer)
+
+ENTRY CONDITIONS:
+- BUY Entry: Armed + HA_Close > KC2_Lower (Inner) + Volume > VolumeMA
+- SELL Entry: Armed + HA_Close < KC2_Upper (Inner) + Volume > VolumeMA
+
+EXIT CONDITIONS:
+- BUY Exit: Supertrend GREEN → RED
+- SELL Exit: Supertrend RED → GREEN
+
+POSITION MANAGEMENT:
+- One position at a time (BUY or SELL, never both)
+- Armed states can be set even when position exists
+- Entry blocked if position exists (silently skip, no log)
+- After exit, check entry conditions immediately (same candle)
+- Position is set regardless of order success/failure
+- Order status (PLACED/REJECTED) is always logged
+
+TIMING:
+- All conditions evaluated on CANDLE CLOSE only
+- No intraday decisions
+- Wait for next candle close before execution
+
+IV & DELTA CALCULATION:
+- IV: Real-time from py_vollib (no default fallback)
+- Delta: Real-time from py_vollib
+- Risk-free rate: 10% for MCX, 6% for NFO
+- If IV calculation fails: Skip that strike
+
+ORDER TYPE:
+- LIMIT orders only (MARKET orders blocked for commodities)
+- Price: Current Option LTP
+- Product: NRML (Positional)
+
+================================================================================
+END OF APPLICATION FLOW
+================================================================================
