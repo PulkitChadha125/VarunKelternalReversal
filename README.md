@@ -84,12 +84,22 @@ The bot implements a **Keltner Channel Reversal Strategy** that identifies poten
 ### Position Management Rules
 
 - **One Position at a Time**: Only one position (BUY or SELL) can be active at any given time
+- **Armed States Can Be Set Anytime**: Armed states (ARMED BUY/SELL) can be set even when a position already exists
+- **Entry Blocked with Existing Position**: Entry trades are **BLOCKED** if a position already exists - must exit first before taking opposite trade
 - **No Entry on Exit Candle**: Cannot enter a new position on the same candle where an exit occurred
 - **Re-entry After Exit**: If armed state is still active after exit, can re-enter on next candle if entry conditions are met
 - **Armed State Persistence**: Armed state remains active after entry (does not reset automatically)
 - **Armed State Reset**: Armed state resets only when opposite condition occurs (not when trade is taken)
 - **All Conditions on Candle Close**: All conditions are evaluated when a candle closes
 - **Volume Confirmation**: Entry requires volume to be above the Volume Moving Average
+
+**Example Scenario:**
+1. **SELL position is active** (PUT option bought)
+2. Price goes below lower KC band → **ARMED BUY is set** (even though SELL position exists)
+3. BUY entry conditions are met (HA close > lower bands, volume > MA) → **BUT NO TRADE** (blocked due to existing SELL position)
+4. Log shows: `BUY ENTRY BLOCKED | Reason: Existing SELL position | Must exit SELL position first`
+5. SELL position exits (Supertrend changes from RED to GREEN)
+6. Next candle: If still ARMED BUY and entry conditions met → **BUY trade is taken** (CALL option)
 
 ### Option Selection Strategy
 
@@ -104,21 +114,28 @@ When a BUY or SELL signal is triggered:
    - Creates list of strikes around ATM
    - Example: [5000, 5050, 5100, 5150, 5200, 5250, 5300, 5350, 5400, 5450, 5500, 5550, 5600]
 
-3. **Delta Calculation**:
+3. **Implied Volatility (IV) Calculation**:
+   - **Real-time IV calculation** using `py_vollib` library
+   - Calculates IV from option's market price (LTP) using Black-Scholes inverse formula
+   - Falls back to API IV if available, then to default 20% if calculation fails
+   - IV source is logged: "py_vollib", "API", or "Default"
+
+4. **Delta Calculation**:
    - For BUY: Calculates delta for CALL options from strikes ≤ ATM
    - For SELL: Calculates delta for PUT options from strikes ≥ ATM
-   - Uses Black-Scholes model with Implied Volatility (IV) from option quotes
+   - Uses `py_vollib` library for accurate delta calculation
+   - Falls back to manual Black-Scholes if py_vollib fails
+   - **Risk-free rates**: 10% for MCX commodities, 6% for NFO equity options
 
-4. **Option Selection**:
+5. **Option Selection**:
    - Selects option with **maximum delta** (highest sensitivity to price movement)
    - For CALLs: Highest positive delta
    - For PUTs: Highest absolute delta (most negative)
 
-5. **Delta Calculation Libraries**:
-   - **scipy.stats.norm**: For cumulative distribution function N(d1)
-   - **math**: For logarithmic and square root calculations
-   - Formula: d1 = [ln(S/K) + (r + σ²/2) × T] / (σ × √T)
-   - Call Delta = N(d1), Put Delta = N(d1) - 1
+6. **Order Placement**:
+   - Uses **LIMIT orders** with current option LTP (Last Traded Price)
+   - MARKET orders are blocked for commodity options on MCX
+   - Order price is set to the option's current market price for better execution
 
 ## 📦 Dependencies
 
@@ -133,6 +150,7 @@ polars>=0.19.0
 polars-talib>=0.1.0
 scipy>=1.10.0
 numpy>=1.24.0
+py_vollib>=1.0.1
 pyarrow
 setuptools
 ```
@@ -304,7 +322,9 @@ CRUDEOIL,19-11-2025,5minute,50,6,1,29,10,3.0,50,2.0,14,50,2.0,12
 | **Armed Buy** | HA Low ≤ Both Lower KC Bands | HA High > Both Upper KC Bands | Remains active after entry (allows re-entry) |
 | **Armed Sell** | HA High ≥ Both Upper KC Bands | HA Low < Both Lower KC Bands | Remains active after entry (allows re-entry) |
 
-**Important**: Armed state does NOT reset when a trade is taken. It only resets when the opposite condition occurs.
+**Important**: 
+- Armed state does NOT reset when a trade is taken. It only resets when the opposite condition occurs.
+- Armed states can be set even when a position exists, but entry trades are blocked until the existing position is exited.
 
 ## 💾 State Management
 
@@ -359,17 +379,26 @@ All trading events are logged to `OrderLog.txt` with timestamps:
 - **ARMED RESET**: When armed conditions are reset (opposite condition)
 - **BUY/SELL ENTRY**: When positions are entered (includes selected option details with delta)
 - **EXIT BUY/SELL**: When positions are exited
-- **DELTA CALCULATION**: Detailed table showing all strike deltas and selected option
+- **DELTA CALCULATION**: Detailed table showing all strike deltas, IV (with source), and selected option
+- **BUY/SELL ENTRY BLOCKED**: When entry conditions are met but blocked due to existing position
 - **ERRORS**: Any errors or re-login events
 
 **Delta Calculation Logging**:
 When a signal is triggered, the bot prints a detailed table showing:
 - All strikes being evaluated
 - Option symbol for each strike
-- Delta value for each strike
-- Implied Volatility (IV) for each strike
+- Delta value for each strike (calculated using py_vollib)
+- Implied Volatility (IV) for each strike with source (py_vollib/API/Default)
 - Option LTP (Last Traded Price)
 - Which option was selected (marked with ✓ SELECTED)
+- Risk-free rate used (10% for MCX, 6% for NFO)
+
+**Entry Blocked Logging**:
+When entry conditions are met but a position already exists, the bot logs:
+- `BUY ENTRY BLOCKED` or `SELL ENTRY BLOCKED`
+- Reason: Existing position type
+- Entry conditions that were met
+- Message: "Must exit [position] position first"
 
 ## ⚠️ Important Notes
 

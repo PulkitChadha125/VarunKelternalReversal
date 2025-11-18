@@ -9,6 +9,8 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import norm
 from math import log, sqrt, exp
+from py_vollib.black_scholes.implied_volatility import implied_volatility
+from py_vollib.black_scholes.greeks.analytical import delta as py_vollib_delta
 from zerodha_integration import (
     login,
     get_historical_data,
@@ -74,21 +76,29 @@ def load_trading_state():
 
 def get_timeframe_minutes(timeframe_str: str) -> int:
     """Convert timeframe string to minutes"""
-    timeframe_lower = timeframe_str.lower()
+    import re
+    timeframe_lower = timeframe_str.lower().strip()
+    
     if 'minute' in timeframe_lower or 'min' in timeframe_lower:
-        # Extract number from strings like "5minute", "5min", "15minute"
-        import re
+        # Extract number from strings like "5minute", "5min", "15minute", "minute"
         match = re.search(r'(\d+)', timeframe_str)
         if match:
+            # Found a number, return it (e.g., "5minute" -> 5, "15minute" -> 15)
             return int(match.group(1))
+        else:
+            # No number found, it's just "minute" -> 1 minute
+            return 1
     elif 'hour' in timeframe_lower or 'hr' in timeframe_lower:
-        import re
+        # Extract number from strings like "1hour", "2hr"
         match = re.search(r'(\d+)', timeframe_str)
         if match:
             return int(match.group(1)) * 60
+        else:
+            # No number found, default to 1 hour
+            return 60
     elif 'day' in timeframe_lower:
         return 1440  # 24 hours
-    return 5  # Default to 5 minutes
+    return 5  # Default to 5 minutes if unrecognized
 
 
 def get_next_candle_time(current_time: datetime, timeframe_minutes: int) -> datetime:
@@ -1083,8 +1093,9 @@ def place_option_order(
     option_symbol: str,
     transaction_type: str,
     quantity: int,
-    order_type: str = "MARKET",
-    product: str = "NRML"
+    order_type: str = "LIMIT",
+    product: str = "NRML",
+    price: float = None
 ) -> dict:
     """
     Place an option order using Kite API.
@@ -1095,35 +1106,62 @@ def place_option_order(
         option_symbol: Option trading symbol (e.g., "CRUDEOIL25NOV5300CE")
         transaction_type: "BUY" or "SELL"
         quantity: Number of lots (will be multiplied by lot size)
-        order_type: Order type - "MARKET" or "LIMIT" (default: "MARKET")
+        order_type: Order type - "MARKET" or "LIMIT" (default: "LIMIT")
         product: Product type - "MIS" (Intraday), "NRML" (Carry forward/Positional), "CNC" (Delivery)
+        price: Price for LIMIT orders (required if order_type is "LIMIT")
     
     Returns:
         Dictionary with order response from Kite API, or None if failed
+        If failed, the error details are logged to OrderLog.txt
     """
+    error_details = None
     try:
         # Get instrument token for the option
         instrument_token = get_instrument_token(kite, exchange, option_symbol)
         if not instrument_token:
-            print(f"[Order] Could not find instrument token for {option_symbol}")
+            error_msg = f"Could not find instrument token for {option_symbol} on exchange {exchange}. Symbol may not exist or exchange may be incorrect."
+            print(f"[Order] {error_msg}")
+            error_details = error_msg
+            write_to_order_logs(f"ORDER FAILED: {transaction_type} {option_symbol} | Exchange: {exchange} | Error: {error_msg}")
             return None
         
-        # Place order
-        order_response = kite.place_order(
-            variety=kite.VARIETY_REGULAR,
-            exchange=exchange,
-            tradingsymbol=option_symbol,
-            transaction_type=transaction_type,
-            quantity=quantity,
-            product=product,
-            order_type=order_type
-        )
+        # For LIMIT orders, price is required
+        if order_type == "LIMIT":
+            if price is None:
+                error_msg = f"Price is required for LIMIT orders. Option LTP not available for {option_symbol}."
+                print(f"[Order] {error_msg}")
+                error_details = error_msg
+                write_to_order_logs(f"ORDER FAILED: {transaction_type} {option_symbol} | Exchange: {exchange} | Error: {error_msg}")
+                return None
         
-        print(f"[Order] {transaction_type} order placed for {option_symbol}: Order ID = {order_response.get('order_id', 'N/A')}")
+        # Prepare order parameters
+        order_params = {
+            'variety': kite.VARIETY_REGULAR,
+            'exchange': exchange,
+            'tradingsymbol': option_symbol,
+            'transaction_type': transaction_type,
+            'quantity': quantity,
+            'product': product,
+            'order_type': order_type
+        }
+        
+        # Add price for LIMIT orders
+        if order_type == "LIMIT" and price is not None:
+            order_params['price'] = round(price, 2)
+        
+        # Place order
+        order_response = kite.place_order(**order_params)
+        
+        price_info = f" | Price: {price:.2f}" if order_type == "LIMIT" and price is not None else ""
+        print(f"[Order] {transaction_type} {order_type} order placed for {option_symbol}: Order ID = {order_response.get('order_id', 'N/A')}{price_info}")
         return order_response
         
     except Exception as e:
-        print(f"[Order] Error placing {transaction_type} order for {option_symbol}: {str(e)}")
+        error_msg = f"API Error: {str(e)}"
+        print(f"[Order] Error placing {transaction_type} order for {option_symbol}: {error_msg}")
+        error_details = error_msg
+        price_info = f" | Price: {price:.2f}" if price is not None else ""
+        write_to_order_logs(f"ORDER FAILED: {transaction_type} {option_symbol} | Exchange: {exchange} | Quantity: {quantity} | Product: {product} | OrderType: {order_type}{price_info} | Error: {error_msg}")
         traceback.print_exc()
         return None
 
@@ -1175,6 +1213,7 @@ def find_option_with_max_delta(
     
     Returns:
         Dictionary with 'strike', 'delta', 'option_symbol', 'iv', 'ltp', etc.
+        Also includes 'all_strikes_evaluated' list with all strike data for logging
     """
     try:
         # Calculate time to expiration
@@ -1186,7 +1225,10 @@ def find_option_with_max_delta(
             print(f"[Max Delta] Option expired for {symbol}")
             return None
         
-        max_delta = -float('inf') if option_type == 'PE' else -1.0
+        # Initialize max_delta based on option type
+        # For PUT: start with 0 (we want highest absolute delta, i.e., most negative)
+        # For CALL: start with -1 (we want highest positive delta)
+        max_delta = 0.0 if option_type == 'PE' else -1.0
         best_option = None
         
         # Store all strike deltas for printing
@@ -1208,33 +1250,91 @@ def find_option_with_max_delta(
                 # Get option quote
                 quote = get_option_quote(kite, exchange, option_symbol)
                 
-                # Get IV from quote (if available)
-                iv = quote.get('iv', None)
-                iv_source = "API"
-                if iv is None:
-                    # If IV not available, try to estimate from historical volatility
-                    # For now, use a default IV of 20% if not available
-                    iv = 0.20
-                    iv_source = "Default"
+                # Get option LTP (Last Traded Price)
+                option_ltp_raw = quote.get('last_price', None)
+                option_ltp_display = 'N/A'
+                option_ltp_float = None
+                
+                if option_ltp_raw is not None:
+                    option_ltp_float = float(option_ltp_raw)
+                    option_ltp_display = f"{option_ltp_float:.2f}"
+                
+                # Calculate IV using py_vollib from option market price
+                iv = None
+                iv_source = "N/A"
+                if option_ltp_float is not None and option_ltp_float > 0:
+                    try:
+                        # Convert option_type to py_vollib format: 'c' for call, 'p' for put
+                        flag = 'c' if option_type == 'CE' else 'p'
+                        
+                        # Calculate implied volatility from market price
+                        iv = implied_volatility(
+                            price=option_ltp_float,
+                            S=ltp,
+                            K=float(strike),
+                            t=time_to_expiry,
+                            r=risk_free_rate,
+                            flag=flag
+                        )
+                        iv_source = "py_vollib"
+                    except Exception as iv_error:
+                        # If IV calculation fails, try to get from API quote
+                        iv_from_api = quote.get('iv', None)
+                        if iv_from_api is not None:
+                            iv = iv_from_api / 100.0 if iv_from_api > 1 else iv_from_api
+                            iv_source = "API"
+                        else:
+                            # Fallback to default 20% if calculation fails and API doesn't provide
+                            iv = 0.20
+                            iv_source = "Default (IV calc failed)"
+                        print(f"[Max Delta] Warning: IV calculation failed for {option_symbol}: {str(iv_error)}")
                 else:
-                    # Convert IV from percentage to decimal if needed
-                    if iv > 1:
-                        iv = iv / 100.0
+                    # If option LTP not available, try API IV or use default
+                    iv_from_api = quote.get('iv', None)
+                    if iv_from_api is not None:
+                        iv = iv_from_api / 100.0 if iv_from_api > 1 else iv_from_api
+                        iv_source = "API"
+                    else:
+                        iv = 0.20
+                        iv_source = "Default (No LTP)"
                 
-                # Calculate delta using Black-Scholes model
-                # Libraries used: scipy.stats.norm for N(d1), math for log/sqrt
-                delta = calculate_delta_black_scholes(
-                    S=ltp,
-                    K=float(strike),
-                    T=time_to_expiry,
-                    r=risk_free_rate,
-                    sigma=iv,
-                    option_type=option_type
-                )
-                
-                option_ltp = quote.get('last_price', 'N/A')
-                if option_ltp != 'N/A':
-                    option_ltp = f"{option_ltp:.2f}"
+                # Calculate delta using py_vollib
+                delta = None
+                if iv is not None and iv > 0:
+                    try:
+                        # Convert option_type to py_vollib format
+                        flag = 'c' if option_type == 'CE' else 'p'
+                        
+                        # Calculate delta using py_vollib
+                        delta = py_vollib_delta(
+                            flag=flag,
+                            S=ltp,
+                            K=float(strike),
+                            t=time_to_expiry,
+                            r=risk_free_rate,
+                            sigma=iv
+                        )
+                    except Exception as delta_error:
+                        # Fallback to manual calculation if py_vollib fails
+                        print(f"[Max Delta] Warning: py_vollib delta calculation failed for {option_symbol}: {str(delta_error)}")
+                        delta = calculate_delta_black_scholes(
+                            S=ltp,
+                            K=float(strike),
+                            T=time_to_expiry,
+                            r=risk_free_rate,
+                            sigma=iv,
+                            option_type=option_type
+                        )
+                else:
+                    # If IV not available, use fallback calculation
+                    delta = calculate_delta_black_scholes(
+                        S=ltp,
+                        K=float(strike),
+                        T=time_to_expiry,
+                        r=risk_free_rate,
+                        sigma=0.20,  # Use default IV for delta calculation
+                        option_type=option_type
+                    )
                 
                 # Store strike data
                 strike_data = {
@@ -1243,7 +1343,8 @@ def find_option_with_max_delta(
                     'option_symbol': option_symbol,
                     'iv': iv,
                     'iv_source': iv_source,
-                    'ltp': option_ltp,
+                    'ltp': option_ltp_display,
+                    'ltp_float': option_ltp_float,  # Store float value for order placement
                     'time_to_expiry': time_to_expiry
                 }
                 all_strike_data.append(strike_data)
@@ -1264,7 +1365,7 @@ def find_option_with_max_delta(
                 
                 # Print strike data with indicator if it's the best
                 status = "✓ SELECTED" if is_best else ""
-                print(f"{strike:<10} {option_symbol:<25} {delta:>11.4f}  {iv*100:>8.2f}%  {option_ltp:>12}  {status:<15}")
+                print(f"{strike:<10} {option_symbol:<25} {delta:>11.4f}  {iv*100:>8.2f}% ({iv_source})  {option_ltp_display:>12}  {status:<15}")
                 
             except Exception as e:
                 print(f"{strike:<10} {'ERROR':<25} {'N/A':<12} {'N/A':<10} {'N/A':<12} {str(e)[:15]:<15}")
@@ -1286,6 +1387,19 @@ def find_option_with_max_delta(
             print(f"\n[WARNING] No valid option found with max delta")
         
         print(f"{'='*80}\n")
+        
+        # Add all strike data to best_option for logging purposes
+        if best_option:
+            best_option['all_strikes_evaluated'] = all_strike_data
+            best_option['underlying_ltp'] = ltp
+            # Calculate ATM strike as the strike closest to LTP
+            if strikes:
+                atm_strike = min(strikes, key=lambda x: abs(x - ltp))
+            else:
+                atm_strike = None
+            best_option['atm_strike'] = atm_strike
+            best_option['time_to_expiry_years'] = time_to_expiry
+            best_option['risk_free_rate'] = risk_free_rate
         
         return best_option
         
@@ -1315,11 +1429,20 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
     5. Re-entry: After exit, if still armed AND entry conditions met, can re-enter immediately
     
     Position Management:
-    - One position at a time
+    - One position at a time (BUY or SELL, never both)
     - No entry on same candle as exit (prevents immediate re-entry on exit candle)
+    - Armed states can be set even when position exists (allows preparation for next trade)
+    - Entry trades are BLOCKED if position already exists (must exit first)
     - Armed state remains active after entry (allows re-entry after exit if still armed)
     - Armed state resets only when opposite condition occurs
     - All conditions evaluated on candle close
+    
+    Example Scenario:
+    - SELL position is active
+    - Price goes below lower KC band → ARMED BUY is set
+    - BUY entry conditions are met → BUT NO TRADE (blocked due to existing SELL position)
+    - SELL position exits (Supertrend reversal)
+    - Next candle: If still ARMED BUY and entry conditions met → BUY trade is taken
     """
     try:
         # Get the latest candle (most recent)
@@ -1389,14 +1512,21 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                     try:
                         params = result_dict.get(unique_key, {})
                         lotsize = int(params.get('Lotsize', 1))
+                        # Get current option LTP for LIMIT order
+                        quote = get_option_quote(kite_client, option_exchange, option_symbol)
+                        option_ltp = quote.get('last_price', None)
+                        if option_ltp is not None:
+                            option_ltp = float(option_ltp)
+                        
                         order_response = place_option_order(
                             kite=kite_client,
                             exchange=option_exchange,
                             option_symbol=option_symbol,
                             transaction_type="SELL",
                             quantity=lotsize,
-                            order_type="MARKET",
-                            product="NRML"  # Positional
+                            order_type="LIMIT",
+                            product="NRML",  # Positional
+                            price=option_ltp
                         )
                         
                         if order_response:
@@ -1443,14 +1573,21 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                     try:
                         params = result_dict.get(unique_key, {})
                         lotsize = int(params.get('Lotsize', 1))
+                        # Get current option LTP for LIMIT order
+                        quote = get_option_quote(kite_client, option_exchange, option_symbol)
+                        option_ltp = quote.get('last_price', None)
+                        if option_ltp is not None:
+                            option_ltp = float(option_ltp)
+                        
                         order_response = place_option_order(
                             kite=kite_client,
                             exchange=option_exchange,
                             option_symbol=option_symbol,
                             transaction_type="SELL",
                             quantity=lotsize,
-                            order_type="MARKET",
-                            product="NRML"  # Positional
+                            order_type="LIMIT",
+                            product="NRML",  # Positional
+                            price=option_ltp
                         )
                         
                         if order_response:
@@ -1485,54 +1622,56 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                 write_to_order_logs(log_msg)
                 return  # Exit early, no entry on exit candle
         
+        # ========== ARMED CONDITIONS (Can be set even when position exists) ==========
+        # ========== ARMED BUY CONDITION ==========
+        # Armed Buy: HA candle low <= both lower Keltner bands
+        if ha_low <= kc1_lower and ha_low <= kc2_lower:
+            if not trading_state.get('armed_buy', False):
+                trading_state['armed_buy'] = True
+                log_msg = (
+                    f"ARMED BUY | Symbol: {future_symbol} | "
+                    f"HA_Low: {ha_low:.2f} <= KC1_Lower: {kc1_lower:.2f} AND KC2_Lower: {kc2_lower:.2f} | "
+                    f"HA_Close: {ha_close:.2f} | Volume: {volume:.0f}"
+                )
+                write_to_order_logs(log_msg)
+        
+        # ========== ARMED SELL CONDITION ==========
+        # Armed Sell: HA candle high >= both upper Keltner bands
+        if ha_high >= kc1_upper and ha_high >= kc2_upper:
+            if not trading_state.get('armed_sell', False):
+                trading_state['armed_sell'] = True
+                log_msg = (
+                    f"ARMED SELL | Symbol: {future_symbol} | "
+                    f"HA_High: {ha_high:.2f} >= KC1_Upper: {kc1_upper:.2f} AND KC2_Upper: {kc2_upper:.2f} | "
+                    f"HA_Close: {ha_close:.2f} | Volume: {volume:.0f}"
+                )
+                write_to_order_logs(log_msg)
+        
+        # ========== ARMED BUY RESET ==========
+        # Reset Armed Buy: candle's high > both upper Keltner bands
+        if ha_high > kc1_upper and ha_high > kc2_upper:
+            if trading_state.get('armed_buy', False):
+                trading_state['armed_buy'] = False
+                log_msg = (
+                    f"ARMED BUY RESET | Symbol: {future_symbol} | "
+                    f"HA_High: {ha_high:.2f} > KC1_Upper: {kc1_upper:.2f} AND KC2_Upper: {kc2_upper:.2f}"
+                )
+                write_to_order_logs(log_msg)
+        
+        # ========== ARMED SELL RESET ==========
+        # Reset Armed Sell: candle's low < both lower Keltner bands
+        if ha_low < kc1_lower and ha_low < kc2_lower:
+            if trading_state.get('armed_sell', False):
+                trading_state['armed_sell'] = False
+                log_msg = (
+                    f"ARMED SELL RESET | Symbol: {future_symbol} | "
+                    f"HA_Low: {ha_low:.2f} < KC1_Lower: {kc1_lower:.2f} AND KC2_Lower: {kc2_lower:.2f}"
+                )
+                write_to_order_logs(log_msg)
+        
         # ========== ENTRY CONDITIONS (Only if no position and not on exit candle) ==========
+        # Entry trades are blocked if position already exists - must exit first
         if current_position is None and not trading_state.get('exit_on_candle', False):
-            
-            # ========== ARMED BUY CONDITION ==========
-            # Armed Buy: HA candle low <= both lower Keltner bands
-            if ha_low <= kc1_lower and ha_low <= kc2_lower:
-                if not trading_state.get('armed_buy', False):
-                    trading_state['armed_buy'] = True
-                    log_msg = (
-                        f"ARMED BUY | Symbol: {future_symbol} | "
-                        f"HA_Low: {ha_low:.2f} <= KC1_Lower: {kc1_lower:.2f} AND KC2_Lower: {kc2_lower:.2f} | "
-                        f"HA_Close: {ha_close:.2f} | Volume: {volume:.0f}"
-                    )
-                    write_to_order_logs(log_msg)
-            
-            # ========== ARMED SELL CONDITION ==========
-            # Armed Sell: HA candle high >= both upper Keltner bands
-            if ha_high >= kc1_upper and ha_high >= kc2_upper:
-                if not trading_state.get('armed_sell', False):
-                    trading_state['armed_sell'] = True
-                    log_msg = (
-                        f"ARMED SELL | Symbol: {future_symbol} | "
-                        f"HA_High: {ha_high:.2f} >= KC1_Upper: {kc1_upper:.2f} AND KC2_Upper: {kc2_upper:.2f} | "
-                        f"HA_Close: {ha_close:.2f} | Volume: {volume:.0f}"
-                    )
-                    write_to_order_logs(log_msg)
-            
-            # ========== ARMED BUY RESET ==========
-            # Reset Armed Buy: candle's high > both upper Keltner bands
-            if ha_high > kc1_upper and ha_high > kc2_upper:
-                if trading_state.get('armed_buy', False):
-                    trading_state['armed_buy'] = False
-                    log_msg = (
-                        f"ARMED BUY RESET | Symbol: {future_symbol} | "
-                        f"HA_High: {ha_high:.2f} > KC1_Upper: {kc1_upper:.2f} AND KC2_Upper: {kc2_upper:.2f}"
-                    )
-                    write_to_order_logs(log_msg)
-            
-            # ========== ARMED SELL RESET ==========
-            # Reset Armed Sell: candle's low < both lower Keltner bands
-            if ha_low < kc1_lower and ha_low < kc2_lower:
-                if trading_state.get('armed_sell', False):
-                    trading_state['armed_sell'] = False
-                    log_msg = (
-                        f"ARMED SELL RESET | Symbol: {future_symbol} | "
-                        f"HA_Low: {ha_low:.2f} < KC1_Lower: {kc1_lower:.2f} AND KC2_Lower: {kc2_lower:.2f}"
-                    )
-                    write_to_order_logs(log_msg)
             
             # ========== BUY ENTRY ==========
             # Buy Entry: Armed Buy AND HA close > both lower Keltner bands AND volume > VolumeMA
@@ -1545,27 +1684,23 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         strike_number = int(params.get('StrikeNumber', 6))
                         expiry = params.get('Expiry', '')
                         
-                        # Find exchange and get LTP for underlying
-                        underlying_exchange = find_exchange_for_symbol(kite_client, symbol)
-                        if not underlying_exchange:
-                            # Try future symbol
-                            underlying_exchange = find_exchange_for_symbol(kite_client, future_symbol)
+                        # Find exchange for future symbol (same logic as historical data)
+                        # Use future_symbol directly, not base symbol
+                        underlying_exchange = find_exchange_for_symbol(kite_client, future_symbol)
                         
                         option_exchange = "NFO"  # Options are typically on NFO
                         if underlying_exchange == "MCX":
                             option_exchange = "MCX"  # MCX commodities have options on MCX
                         
-                        # Get LTP for underlying
+                        # Get LTP for future symbol (same as we use for historical data)
                         ltp = None
                         if underlying_exchange:
-                            ltp = get_ltp(kite_client, underlying_exchange, symbol)
-                            if not ltp:
-                                ltp = get_ltp(kite_client, underlying_exchange, future_symbol)
+                            ltp = get_ltp(kite_client, underlying_exchange, future_symbol)
                         
                         # If LTP not available, use ha_close as approximation
                         if not ltp:
                             ltp = ha_close
-                            print(f"[Buy Entry] LTP not available, using HA_Close: {ltp:.2f}")
+                            print(f"[Buy Entry] LTP not available for {future_symbol}, using HA_Close: {ltp:.2f}")
                         
                         # Normalize strike and create strike list
                         atm = normalize_strike(ltp, strike_step)
@@ -1578,6 +1713,8 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         selected_option = None
                         if kite_client and expiry and buy_strikes:
                             try:
+                                # Use 10% risk-free rate for MCX, 6% for NFO
+                                risk_free_rate = 0.10 if option_exchange == "MCX" else 0.06
                                 selected_option = find_option_with_max_delta(
                                     kite=kite_client,
                                     symbol=symbol,
@@ -1586,37 +1723,66 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                                     strikes=buy_strikes,
                                     ltp=ltp,
                                     option_type='CE',  # Call option for buy
-                                    risk_free_rate=0.06
+                                    risk_free_rate=risk_free_rate
                                 )
                             except Exception as e:
                                 print(f"[Buy Entry] Error finding option with max delta: {str(e)}")
                                 traceback.print_exc()
+                        
+                        # Log delta calculation details before placing order
+                        if selected_option:
+                            # Log comprehensive delta calculation details
+                            delta_log_msg = f"DELTA CALCULATION | Option Type: CE | Underlying: {symbol} | LTP: {selected_option.get('underlying_ltp', ltp):.2f} | ATM Strike: {selected_option.get('atm_strike', 'N/A')} | Time to Expiry: {selected_option.get('time_to_expiry_years', 0):.4f} years | Risk-free Rate: {selected_option.get('risk_free_rate', 0.06)*100:.2f}%"
+                            write_to_order_logs(delta_log_msg)
+                            
+                            # Log all strikes evaluated
+                            if 'all_strikes_evaluated' in selected_option:
+                                strikes_evaluated = selected_option['all_strikes_evaluated']
+                                write_to_order_logs(f"STRIKES EVALUATED: {len(strikes_evaluated)} strikes | Strike List: {buy_strikes}")
+                                for strike_data in strikes_evaluated:
+                                    # Determine delta source (py_vollib or fallback)
+                                    delta_source = "py_vollib" if strike_data.get('iv_source') == "py_vollib" else "fallback"
+                                    strike_log = (
+                                        f"  Strike: {strike_data['strike']} | Symbol: {strike_data['option_symbol']} | "
+                                        f"Delta: {strike_data['delta']:.6f} ({delta_source}) | IV: {strike_data['iv']*100:.2f}% ({strike_data['iv_source']}) | "
+                                        f"LTP: {strike_data['ltp']} | {'✓ SELECTED' if strike_data['strike'] == selected_option['strike'] else ''}"
+                                    )
+                                    write_to_order_logs(strike_log)
                         
                         # Place BUY order for CALL option
                         order_response = None
                         if selected_option and kite_client:
                             try:
                                 lotsize = int(params.get('Lotsize', 1))
+                                # Get option LTP for LIMIT order
+                                option_ltp = selected_option.get('ltp_float', None)
+                                if option_ltp is None:
+                                    # Try to get from quote if not stored
+                                    quote = get_option_quote(kite_client, option_exchange, selected_option['option_symbol'])
+                                    option_ltp = quote.get('last_price', None)
+                                    if option_ltp is not None:
+                                        option_ltp = float(option_ltp)
+                                
                                 order_response = place_option_order(
                                     kite=kite_client,
                                     exchange=option_exchange,
                                     option_symbol=selected_option['option_symbol'],
                                     transaction_type="BUY",
                                     quantity=lotsize,
-                                    order_type="MARKET",
-                                    product="NRML"  # Positional
+                                    order_type="LIMIT",
+                                    product="NRML",  # Positional
+                                    price=option_ltp
                                 )
                                 
                                 if order_response:
                                     trading_state['option_symbol'] = selected_option['option_symbol']
                                     trading_state['option_exchange'] = option_exchange
                                     trading_state['option_order_id'] = order_response.get('order_id', None)
-                                    write_to_order_logs(f"ORDER PLACED: BUY {selected_option['option_symbol']} | Order ID: {order_response.get('order_id', 'N/A')} | Quantity: {lotsize}")
-                                else:
-                                    write_to_order_logs(f"ORDER FAILED: BUY {selected_option['option_symbol']} | Order placement failed")
+                                    write_to_order_logs(f"ORDER PLACED: BUY {selected_option['option_symbol']} | Order ID: {order_response.get('order_id', 'N/A')} | Quantity: {lotsize} | Exchange: {option_exchange}")
+                                # Note: Error logging is now handled in place_option_order function
                             except Exception as e:
                                 print(f"[Buy Entry] Error placing order: {str(e)}")
-                                write_to_order_logs(f"ORDER ERROR: BUY {selected_option['option_symbol']} | Error: {str(e)}")
+                                write_to_order_logs(f"ORDER ERROR: BUY {selected_option['option_symbol']} | Exception: {str(e)}")
                                 traceback.print_exc()
                         
                         # Take buy position
@@ -1658,27 +1824,23 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         strike_number = int(params.get('StrikeNumber', 6))
                         expiry = params.get('Expiry', '')
                         
-                        # Find exchange and get LTP for underlying
-                        underlying_exchange = find_exchange_for_symbol(kite_client, symbol)
-                        if not underlying_exchange:
-                            # Try future symbol
-                            underlying_exchange = find_exchange_for_symbol(kite_client, future_symbol)
+                        # Find exchange for future symbol (same logic as historical data)
+                        # Use future_symbol directly, not base symbol
+                        underlying_exchange = find_exchange_for_symbol(kite_client, future_symbol)
                         
                         option_exchange = "NFO"  # Options are typically on NFO
                         if underlying_exchange == "MCX":
                             option_exchange = "MCX"  # MCX commodities have options on MCX
                         
-                        # Get LTP for underlying
+                        # Get LTP for future symbol (same as we use for historical data)
                         ltp = None
                         if underlying_exchange:
-                            ltp = get_ltp(kite_client, underlying_exchange, symbol)
-                            if not ltp:
-                                ltp = get_ltp(kite_client, underlying_exchange, future_symbol)
+                            ltp = get_ltp(kite_client, underlying_exchange, future_symbol)
                         
                         # If LTP not available, use ha_close as approximation
                         if not ltp:
                             ltp = ha_close
-                            print(f"[Sell Entry] LTP not available, using HA_Close: {ltp:.2f}")
+                            print(f"[Sell Entry] LTP not available for {future_symbol}, using HA_Close: {ltp:.2f}")
                         
                         # Normalize strike and create strike list
                         atm = normalize_strike(ltp, strike_step)
@@ -1691,6 +1853,8 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         selected_option = None
                         if kite_client and expiry and sell_strikes:
                             try:
+                                # Use 10% risk-free rate for MCX, 6% for NFO
+                                risk_free_rate = 0.10 if option_exchange == "MCX" else 0.06
                                 selected_option = find_option_with_max_delta(
                                     kite=kite_client,
                                     symbol=symbol,
@@ -1699,37 +1863,66 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                                     strikes=sell_strikes,
                                     ltp=ltp,
                                     option_type='PE',  # Put option for sell
-                                    risk_free_rate=0.06
+                                    risk_free_rate=risk_free_rate
                                 )
                             except Exception as e:
                                 print(f"[Sell Entry] Error finding option with max delta: {str(e)}")
                                 traceback.print_exc()
+                        
+                        # Log delta calculation details before placing order
+                        if selected_option:
+                            # Log comprehensive delta calculation details
+                            delta_log_msg = f"DELTA CALCULATION | Option Type: PE | Underlying: {symbol} | LTP: {selected_option.get('underlying_ltp', ltp):.2f} | ATM Strike: {selected_option.get('atm_strike', 'N/A')} | Time to Expiry: {selected_option.get('time_to_expiry_years', 0):.4f} years | Risk-free Rate: {selected_option.get('risk_free_rate', 0.06)*100:.2f}%"
+                            write_to_order_logs(delta_log_msg)
+                            
+                            # Log all strikes evaluated
+                            if 'all_strikes_evaluated' in selected_option:
+                                strikes_evaluated = selected_option['all_strikes_evaluated']
+                                write_to_order_logs(f"STRIKES EVALUATED: {len(strikes_evaluated)} strikes | Strike List: {sell_strikes}")
+                                for strike_data in strikes_evaluated:
+                                    # Determine delta source (py_vollib or fallback)
+                                    delta_source = "py_vollib" if strike_data.get('iv_source') == "py_vollib" else "fallback"
+                                    strike_log = (
+                                        f"  Strike: {strike_data['strike']} | Symbol: {strike_data['option_symbol']} | "
+                                        f"Delta: {strike_data['delta']:.6f} ({delta_source}) | IV: {strike_data['iv']*100:.2f}% ({strike_data['iv_source']}) | "
+                                        f"LTP: {strike_data['ltp']} | {'✓ SELECTED' if strike_data['strike'] == selected_option['strike'] else ''}"
+                                    )
+                                    write_to_order_logs(strike_log)
                         
                         # Place BUY order for PUT option
                         order_response = None
                         if selected_option and kite_client:
                             try:
                                 lotsize = int(params.get('Lotsize', 1))
+                                # Get option LTP for LIMIT order
+                                option_ltp = selected_option.get('ltp_float', None)
+                                if option_ltp is None:
+                                    # Try to get from quote if not stored
+                                    quote = get_option_quote(kite_client, option_exchange, selected_option['option_symbol'])
+                                    option_ltp = quote.get('last_price', None)
+                                    if option_ltp is not None:
+                                        option_ltp = float(option_ltp)
+                                
                                 order_response = place_option_order(
                                     kite=kite_client,
                                     exchange=option_exchange,
                                     option_symbol=selected_option['option_symbol'],
                                     transaction_type="BUY",
                                     quantity=lotsize,
-                                    order_type="MARKET",
-                                    product="NRML"  # Positional
+                                    order_type="LIMIT",
+                                    product="NRML",  # Positional
+                                    price=option_ltp
                                 )
                                 
                                 if order_response:
                                     trading_state['option_symbol'] = selected_option['option_symbol']
                                     trading_state['option_exchange'] = option_exchange
                                     trading_state['option_order_id'] = order_response.get('order_id', None)
-                                    write_to_order_logs(f"ORDER PLACED: BUY {selected_option['option_symbol']} | Order ID: {order_response.get('order_id', 'N/A')} | Quantity: {lotsize}")
-                                else:
-                                    write_to_order_logs(f"ORDER FAILED: BUY {selected_option['option_symbol']} | Order placement failed")
+                                    write_to_order_logs(f"ORDER PLACED: BUY {selected_option['option_symbol']} | Order ID: {order_response.get('order_id', 'N/A')} | Quantity: {lotsize} | Exchange: {option_exchange}")
+                                # Note: Error logging is now handled in place_option_order function
                             except Exception as e:
                                 print(f"[Sell Entry] Error placing order: {str(e)}")
-                                write_to_order_logs(f"ORDER ERROR: BUY {selected_option['option_symbol']} | Error: {str(e)}")
+                                write_to_order_logs(f"ORDER ERROR: BUY {selected_option['option_symbol']} | Exception: {str(e)}")
                                 traceback.print_exc()
                         
                         # Take sell position
@@ -1759,6 +1952,33 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                             log_msg += " | Option Selection: Failed or not available"
                         
                         write_to_order_logs(log_msg)
+        
+        # ========== ENTRY BLOCKED DUE TO EXISTING POSITION ==========
+        # Log when entry conditions are met but blocked because position already exists
+        if current_position is not None:
+            # Check if BUY entry conditions are met but blocked
+            if trading_state.get('armed_buy', False):
+                if ha_close > kc1_lower and ha_close > kc2_lower:
+                    if volume_ma is not None and volume > volume_ma:
+                        write_to_order_logs(
+                            f"BUY ENTRY BLOCKED | Symbol: {future_symbol} | "
+                            f"Reason: Existing {current_position} position | "
+                            f"HA_Close: {ha_close:.2f} > KC1_Lower: {kc1_lower:.2f} AND KC2_Lower: {kc2_lower:.2f} | "
+                            f"Volume: {volume:.0f} > VolumeMA: {volume_ma:.0f} | "
+                            f"Must exit {current_position} position first"
+                        )
+            
+            # Check if SELL entry conditions are met but blocked
+            if trading_state.get('armed_sell', False):
+                if ha_close < kc1_upper and ha_close < kc2_upper:
+                    if volume_ma is not None and volume > volume_ma:
+                        write_to_order_logs(
+                            f"SELL ENTRY BLOCKED | Symbol: {future_symbol} | "
+                            f"Reason: Existing {current_position} position | "
+                            f"HA_Close: {ha_close:.2f} < KC1_Upper: {kc1_upper:.2f} AND KC2_Upper: {kc2_upper:.2f} | "
+                            f"Volume: {volume:.0f} > VolumeMA: {volume_ma:.0f} | "
+                            f"Must exit {current_position} position first"
+                        )
         
     except Exception as e:
         error_msg = f"Error in execute_trading_strategy for {symbol}: {str(e)}"
