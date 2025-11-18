@@ -12,3 +12,17 @@ delta = buy = ITM = CALL BUY  MAX DELTA = BUY CALL
 
 
 DELTA = SELL = ITM = PUT BUY MAX DELTA= BUY PUT
+
+
+
+flow of application is like this
+1. arm the buy  when candle low less than outer kc channel
+2. wait for another candle close to be above inner kc band and volume should be greater than volume ma 
+3. take the entry print the status (ireespective iorder was completed or rejected by broker) just print broker status 
+
+4. if high is less than higher kc outer band and position of buy is opened then we arm to sell do not open any sell position untill buy positon is exited by supertrend 
+
+5. once position is exited we check arm status is buy or sell and then check for entry conditon if arm is sell we see previous close is less than upper inner kc band and volume > volume ma, if it is buy  candle close to be above inner kc band and volume should be greater than volume ma
+
+
+ 

@@ -37,69 +37,82 @@ An automated trading bot for Zerodha that implements a Keltner Channel reversal 
 
 The bot implements a **Keltner Channel Reversal Strategy** that identifies potential reversal points when price moves outside the Keltner Channel bands and then reverses back inside.
 
+**Important Note**: 
+- **KC1 = Outer Band** (wider channel)
+- **KC2 = Inner Band** (narrower channel)
+
 ### Trading Conditions
 
 #### BUY Conditions
 
 1. **Armed Buy Condition**:
-   - Heikin-Ashi candle low ≤ both lower Keltner bands (KC1_lower AND KC2_lower)
+   - Heikin-Ashi candle low < **outer KC lower band (KC1_lower)**
+   - Evaluated on candle close
    - This arms the buy signal
 
 2. **Buy Entry**:
-   - Once armed, when Heikin-Ashi candle close > both lower Keltner bands (KC1_lower AND KC2_lower)
+   - Once armed, when Heikin-Ashi candle close > **inner KC lower band (KC2_lower)**
    - AND volume > VolumeMA (29-period moving average)
+   - Evaluated on candle close
    - Take BUY position with CALL option (selected based on maximum delta)
    - **Armed state remains active** after entry (allows re-entry after exit)
 
 3. **Buy Exit**:
    - Supertrend changes from GREEN (trend=1, uptrend) to RED (trend=-1, downtrend)
+   - Evaluated on candle close
    - Exit the BUY position
-   - If still armed, can re-enter on next candle if entry conditions are met
+   - After exit, immediately check if armed SELL and entry conditions on same candle
 
 4. **Armed Buy Reset**:
-   - Reset armed buy status **ONLY** when candle's high > both upper Keltner bands (KC1_upper AND KC2_upper)
+   - Reset armed buy status when candle's high > both upper Keltner bands (KC1_upper AND KC2_upper)
+   - Evaluated on candle close
    - Armed state does NOT reset when trade is taken
 
 #### SELL Conditions
 
 1. **Armed Sell Condition**:
-   - Heikin-Ashi candle high ≥ both upper Keltner bands (KC1_upper AND KC2_upper)
+   - When **BUY position exists**: Heikin-Ashi candle high ≥ **outer KC upper band (KC1_upper)**
+   - OR when **no position**: Heikin-Ashi candle high ≥ **outer KC upper band (KC1_upper)**
+   - Evaluated on candle close
    - This arms the sell signal
+   - **Note**: If BUY position exists, SELL entry is blocked until BUY exits
 
 2. **Sell Entry**:
-   - Once armed, when Heikin-Ashi candle close < both upper Keltner bands (KC1_upper AND KC2_upper)
+   - Once armed, when Heikin-Ashi candle close < **inner KC upper band (KC2_upper)**
    - AND volume > VolumeMA (29-period moving average)
+   - Evaluated on candle close
    - Take SELL position with PUT option (selected based on maximum delta)
    - **Armed state remains active** after entry (allows re-entry after exit)
 
 3. **Sell Exit**:
    - Supertrend changes from RED (trend=-1, downtrend) to GREEN (trend=1, uptrend)
+   - Evaluated on candle close
    - Exit the SELL position
-   - If still armed, can re-enter on next candle if entry conditions are met
+   - After exit, immediately check if armed BUY/SELL and entry conditions on same candle
 
 4. **Armed Sell Reset**:
-   - Reset armed sell status **ONLY** when candle's low < both lower Keltner bands (KC1_lower AND KC2_lower)
+   - Reset armed sell status when candle's low < both lower Keltner bands (KC1_lower AND KC2_lower)
+   - Evaluated on candle close
    - Armed state does NOT reset when trade is taken
 
 ### Position Management Rules
 
 - **One Position at a Time**: Only one position (BUY or SELL) can be active at any given time
 - **Armed States Can Be Set Anytime**: Armed states (ARMED BUY/SELL) can be set even when a position already exists
-- **Entry Blocked with Existing Position**: Entry trades are **BLOCKED** if a position already exists - must exit first before taking opposite trade
-- **No Entry on Exit Candle**: Cannot enter a new position on the same candle where an exit occurred
-- **Re-entry After Exit**: If armed state is still active after exit, can re-enter on next candle if entry conditions are met
+- **Entry Blocked with Existing Position**: Entry trades are **SILENTLY BLOCKED** if a position already exists - no log, no order, must exit first
+- **Immediate Re-entry After Exit**: After exit, immediately check armed status and entry conditions on the **same candle** (no waiting for next candle)
 - **Armed State Persistence**: Armed state remains active after entry (does not reset automatically)
 - **Armed State Reset**: Armed state resets only when opposite condition occurs (not when trade is taken)
-- **All Conditions on Candle Close**: All conditions are evaluated when a candle closes
+- **All Conditions on Candle Close**: All conditions (entry, exit, arm) are evaluated when a candle closes
 - **Volume Confirmation**: Entry requires volume to be above the Volume Moving Average
+- **Order Status Logging**: Position is set regardless of order success/failure, broker status (PLACED/REJECTED) is logged
 
 **Example Scenario:**
-1. **SELL position is active** (PUT option bought)
-2. Price goes below lower KC band → **ARMED BUY is set** (even though SELL position exists)
-3. BUY entry conditions are met (HA close > lower bands, volume > MA) → **BUT NO TRADE** (blocked due to existing SELL position)
-4. Log shows: `BUY ENTRY BLOCKED | Reason: Existing SELL position | Must exit SELL position first`
-5. SELL position exits (Supertrend changes from RED to GREEN)
-6. Next candle: If still ARMED BUY and entry conditions met → **BUY trade is taken** (CALL option)
+1. **BUY position is active** (CALL option bought)
+2. Price goes above outer upper KC band (KC1_upper) → **ARMED SELL is set** (even though BUY position exists)
+3. SELL entry conditions are met (HA close < KC2_upper, volume > MA) → **BUT NO TRADE** (silently blocked, no log)
+4. BUY position exits (Supertrend changes from GREEN to RED)
+5. **Same candle**: Check if armed SELL → If HA close < KC2_upper AND volume > MA → **SELL trade is taken** (PUT option)
 
 ### Option Selection Strategy
 
@@ -282,6 +295,126 @@ CRUDEOIL,19-11-2025,5minute,50,6,1,29,10,3.0,50,2.0,14,50,2.0,12
 
 4. **Stop the bot**: Press `Ctrl+C` (state will be saved automatically)
 
+## 🔄 Application Flow
+
+### 1. Initialization Phase
+
+```
+Start Application
+    ↓
+Load Trading State (state.json)
+    ↓
+Zerodha Login (zerodha_login())
+    ↓
+Load Trading Settings (TradeSettings.csv)
+    ↓
+Calculate Timeframe (from settings)
+    ↓
+Enter Main Loop
+```
+
+### 2. Main Execution Loop
+
+```
+Main Loop (Continuous)
+    ↓
+Check Time:
+    - If 9:00 AM → Auto-login
+    - Calculate next candle time
+    ↓
+Wait Until Next Candle Close
+    ↓
+Execute Strategy (main_strategy())
+    ↓
+Save Trading State
+    ↓
+Repeat
+```
+
+### 3. Strategy Execution Flow (Per Symbol)
+
+```
+For Each Symbol in TradeSettings:
+    ↓
+Fetch Historical Data (last 10 days)
+    ↓
+Calculate Indicators:
+    - Heikin-Ashi Candles
+    - Keltner Channel 1 (Outer) - KC1
+    - Keltner Channel 2 (Inner) - KC2
+    - Supertrend
+    - Volume Moving Average
+    ↓
+Execute Trading Strategy (execute_trading_strategy())
+    ↓
+Check Exit Conditions First:
+    - BUY Exit: Supertrend GREEN → RED
+    - SELL Exit: Supertrend RED → GREEN
+    ↓
+Check Armed Conditions:
+    - BUY Armed: HA Low < KC1_Lower (Outer)
+    - SELL Armed: HA High ≥ KC1_Upper (Outer)
+    ↓
+Check Entry Conditions (if no position):
+    - BUY Entry: Armed + HA Close > KC2_Lower (Inner) + Volume > MA
+    - SELL Entry: Armed + HA Close < KC2_Upper (Inner) + Volume > MA
+    ↓
+After Exit: Check Armed Status & Entry Conditions (same candle)
+    ↓
+Display Trading Summary
+```
+
+### 4. Order Placement Flow
+
+```
+Entry Signal Triggered
+    ↓
+Select Option with Max Delta:
+    - Get Underlying LTP
+    - Normalize to ATM Strike
+    - Create Strike List
+    - Calculate IV (py_vollib) for each strike
+    - Calculate Delta (py_vollib) for each strike
+    - Select strike with maximum delta
+    ↓
+Place LIMIT Order:
+    - Order Type: LIMIT
+    - Price: Current Option LTP
+    - Quantity: From TradeSettings
+    ↓
+Log Order Status:
+    - PLACED: Order ID logged
+    - REJECTED: Rejection reason logged
+    ↓
+Set Position (regardless of order success/failure)
+    ↓
+Save Trading State
+```
+
+### 5. Position Management Flow
+
+```
+Position = None
+    ↓
+Armed BUY = True (HA Low < KC1_Lower)
+    ↓
+Entry Condition Met (HA Close > KC2_Lower + Volume > MA)
+    ↓
+Place BUY Order → Position = 'BUY'
+    ↓
+[While BUY Position Active]
+    ↓
+Armed SELL = True (HA High ≥ KC1_Upper) [Can be set while BUY active]
+    ↓
+SELL Entry Condition Met → BLOCKED (silently skip, no log)
+    ↓
+BUY Exit (Supertrend GREEN → RED)
+    ↓
+Position = None (same candle)
+    ↓
+Check Armed SELL → If entry conditions met → SELL Entry (same candle)
+```
+
 ## 📁 File Structure
 
 ```
@@ -305,8 +438,8 @@ CRUDEOIL,19-11-2025,5minute,50,6,1,29,10,3.0,50,2.0,14,50,2.0,12
 
 | Signal | Condition |
 |--------|-----------|
-| **BUY Entry** | Armed Buy + HA Close > Both Lower KC Bands + Volume > VolumeMA |
-| **SELL Entry** | Armed Sell + HA Close < Both Upper KC Bands + Volume > VolumeMA |
+| **BUY Entry** | Armed Buy + HA Close > KC2_Lower (Inner) + Volume > VolumeMA |
+| **SELL Entry** | Armed Sell + HA Close < KC2_Upper (Inner) + Volume > VolumeMA |
 
 ### Exit Signals
 
@@ -319,12 +452,14 @@ CRUDEOIL,19-11-2025,5minute,50,6,1,29,10,3.0,50,2.0,14,50,2.0,12
 
 | Condition | Trigger | Reset | Notes |
 |-----------|---------|-------|-------|
-| **Armed Buy** | HA Low ≤ Both Lower KC Bands | HA High > Both Upper KC Bands | Remains active after entry (allows re-entry) |
-| **Armed Sell** | HA High ≥ Both Upper KC Bands | HA Low < Both Lower KC Bands | Remains active after entry (allows re-entry) |
+| **Armed Buy** | HA Low < KC1_Lower (Outer) | HA High > Both Upper KC Bands | Remains active after entry (allows re-entry) |
+| **Armed Sell** | HA High ≥ KC1_Upper (Outer) | HA Low < Both Lower KC Bands | Can be set while BUY position exists |
 
 **Important**: 
+- **KC1 = Outer Band** (wider), **KC2 = Inner Band** (narrower)
 - Armed state does NOT reset when a trade is taken. It only resets when the opposite condition occurs.
-- Armed states can be set even when a position exists, but entry trades are blocked until the existing position is exited.
+- Armed states can be set even when a position exists, but entry trades are silently blocked until the existing position is exited.
+- After exit, entry conditions are checked immediately on the same candle.
 
 ## 💾 State Management
 
@@ -393,12 +528,14 @@ When a signal is triggered, the bot prints a detailed table showing:
 - Which option was selected (marked with ✓ SELECTED)
 - Risk-free rate used (10% for MCX, 6% for NFO)
 
-**Entry Blocked Logging**:
-When entry conditions are met but a position already exists, the bot logs:
-- `BUY ENTRY BLOCKED` or `SELL ENTRY BLOCKED`
-- Reason: Existing position type
-- Entry conditions that were met
-- Message: "Must exit [position] position first"
+**Order Status Logging**:
+- Entry orders log: `Order Status: PLACED` with Order ID, or `Order Status: REJECTED` with rejection reason
+- Position is set regardless of order success/failure
+- Broker response (success/failure) is always logged
+
+**Entry Blocked Behavior**:
+- When entry conditions are met but a position already exists, the bot **silently skips** (no log, no order)
+- This prevents conflicting trades and ensures one position at a time
 
 ## ⚠️ Important Notes
 

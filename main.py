@@ -1451,35 +1451,32 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
     Execute trading strategy based on Heikin-Ashi candles, Keltner Channels, Supertrend, and Volume.
     
     Strategy Rules:
+    Note: KC1 = Outer band, KC2 = Inner band
+    
     BUY:
-    1. Armed Buy: HA candle low <= both lower Keltner bands (KC1_lower AND KC2_lower)
-    2. Buy Entry: Once armed, when HA candle close > both lower Keltner bands AND volume > VolumeMA
-    3. Buy Exit: Supertrend changes from green (trend=1) to red (trend=-1)
-    4. Armed Buy Reset: Reset ONLY when candle's high > both upper Keltner bands
-    5. Re-entry: After exit, if still armed AND entry conditions met, can re-enter immediately
+    1. Armed Buy: HA candle low < outer KC lower band (KC1_lower - outer band) - evaluated on candle close
+    2. Buy Entry: Any candle close > inner KC lower band (KC2_lower - inner band) AND volume > VolumeMA - evaluated on candle close
+    3. Buy Exit: Supertrend changes from green (trend=1) to red (trend=-1) - evaluated on candle close
+    4. Armed Buy Reset: Reset when candle's high > both upper Keltner bands - evaluated on candle close
+    5. After Exit: Check if armed BUY, if current close > KC2_lower AND volume > VolumeMA → take entry
     
     SELL:
-    1. Armed Sell: HA candle high >= both upper Keltner bands (KC1_upper AND KC2_upper)
-    2. Sell Entry: Once armed, when HA candle close < both upper Keltner bands AND volume > VolumeMA
-    3. Sell Exit: Supertrend changes from red (trend=-1) to green (trend=1)
-    4. Armed Sell Reset: Reset ONLY when candle's low < both lower Keltner bands
-    5. Re-entry: After exit, if still armed AND entry conditions met, can re-enter immediately
+    1. Armed Sell: When BUY position exists, arm SELL if HA high >= outer KC upper band (KC1_upper - outer band) - evaluated on candle close
+       OR if no position, arm SELL when HA high >= outer KC upper band (KC1_upper - outer band) - evaluated on candle close
+    2. Sell Entry: Once armed, when current candle close < inner KC upper band (KC2_upper - inner band) AND volume > VolumeMA - evaluated on candle close
+    3. Sell Exit: Supertrend changes from red (trend=-1) to green (trend=1) - evaluated on candle close
+    4. Armed Sell Reset: Reset when candle's low < both lower Keltner bands - evaluated on candle close
+    5. After Exit: Check if armed SELL, if current close < KC2_upper AND volume > VolumeMA → take entry
     
     Position Management:
     - One position at a time (BUY or SELL, never both)
-    - No entry on same candle as exit (prevents immediate re-entry on exit candle)
-    - Armed states can be set even when position exists (allows preparation for next trade)
-    - Entry trades are BLOCKED if position already exists (must exit first)
+    - Armed states can be set even when position exists
+    - Entry trades are BLOCKED if position already exists (silently skip, no log)
+    - After exit, immediately check armed status and entry conditions on same candle
     - Armed state remains active after entry (allows re-entry after exit if still armed)
     - Armed state resets only when opposite condition occurs
     - All conditions evaluated on candle close
-    
-    Example Scenario:
-    - SELL position is active
-    - Price goes below lower KC band → ARMED BUY is set
-    - BUY entry conditions are met → BUT NO TRADE (blocked due to existing SELL position)
-    - SELL position exits (Supertrend reversal)
-    - Next candle: If still ARMED BUY and entry conditions met → BUY trade is taken
+    - Entry orders: Position is set regardless of order success/failure, broker status is logged
     """
     try:
         # Get the latest candle (most recent)
@@ -1512,27 +1509,16 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
             print(f"[Strategy] Missing indicator values for {symbol}, skipping strategy execution")
             return
         
-        # Get previous candle for trend change detection
+        # Get previous candle for trend change detection and entry conditions
+        prev_row = None
+        prev_ha_close = None
         if df.height >= 2:
             prev_row = df.tail(2).row(0, named=True)  # Second to last row
             prev_supertrend_trend = prev_row.get('supertrend_trend', None)
+            prev_ha_close = prev_row.get('ha_close', None)
         else:
             prev_supertrend_trend = None
-        
-        # Reset exit_on_candle flag if we're on a new candle (not the exit candle anymore)
-        last_exit_candle_date = trading_state.get('last_exit_candle_date', None)
-        current_candle_date = date
-        
-        if trading_state.get('exit_on_candle', False):
-            # Check if this is a different candle (compare dates)
-            if last_exit_candle_date is not None and current_candle_date is not None:
-                if current_candle_date != last_exit_candle_date:
-                    # We're on a new candle, reset the flag
-                    trading_state['exit_on_candle'] = False
-                    trading_state['last_exit_candle_date'] = None
-            else:
-                # If dates are not available, reset after one execution
-                trading_state['exit_on_candle'] = False
+            prev_ha_close = None
         
         # ========== EXIT CONDITIONS (Check first before entry) ==========
         current_position = trading_state.get('position', None)
@@ -1566,37 +1552,26 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                             price=option_ltp
                         )
                         
+                        # Place exit order (don't wait for response)
                         if order_response:
                             write_to_order_logs(f"EXIT ORDER PLACED: SELL {option_symbol} | Order ID: {order_response.get('order_id', 'N/A')} | Quantity: {lotsize}")
-                        else:
-                            write_to_order_logs(f"EXIT ORDER FAILED: SELL {option_symbol} | Order placement failed")
+                        # Note: Error logging is handled in place_option_order function
                     except Exception as e:
                         print(f"[Buy Exit] Error placing exit order: {str(e)}")
                         write_to_order_logs(f"EXIT ORDER ERROR: SELL {option_symbol} | Error: {str(e)}")
                         traceback.print_exc()
                 
+                # Log exit and update position
+                write_to_order_logs(f"ORDER EXITED: BUY position | Symbol: {future_symbol} | Option: {option_symbol} | Supertrend: {prev_supertrend_trend} -> {supertrend_trend}")
+                
                 # Exit buy position
                 trading_state['position'] = None
-                trading_state['exit_on_candle'] = True  # Prevent entry on this candle
-                trading_state['last_exit_candle_date'] = current_candle_date  # Track which candle we exited on
                 trading_state['option_symbol'] = None  # Clear option symbol
                 trading_state['option_exchange'] = None  # Clear exchange
                 trading_state['option_order_id'] = None  # Clear order ID
                 save_trading_state()  # Save state after position change
                 
-                log_msg = (
-                    f"EXIT BUY | Symbol: {future_symbol} | "
-                    f"Price: {ha_close:.2f} | Volume: {volume:.0f} | "
-                    f"Supertrend: {prev_supertrend_trend} -> {supertrend_trend} | "
-                    f"HA_Close: {ha_close:.2f} | HA_High: {ha_high:.2f} | HA_Low: {ha_low:.2f} | "
-                    f"KC1_Upper: {kc1_upper:.2f} | KC1_Lower: {kc1_lower:.2f} | "
-                    f"KC2_Upper: {kc2_upper:.2f} | KC2_Lower: {kc2_lower:.2f} | "
-                    f"Supertrend_Value: {supertrend:.2f}"
-                )
-                if option_symbol:
-                    log_msg += f" | Exited Option: {option_symbol}"
-                write_to_order_logs(log_msg)
-                return  # Exit early, no entry on exit candle
+                # Continue to check for new entry conditions on same candle (don't return)
         
         # Sell Position Exit: Supertrend changes from red (-1) to green (1)
         if current_position == 'SELL':
@@ -1627,62 +1602,64 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                             price=option_ltp
                         )
                         
+                        # Place exit order (don't wait for response)
                         if order_response:
                             write_to_order_logs(f"EXIT ORDER PLACED: SELL {option_symbol} | Order ID: {order_response.get('order_id', 'N/A')} | Quantity: {lotsize}")
-                        else:
-                            write_to_order_logs(f"EXIT ORDER FAILED: SELL {option_symbol} | Order placement failed")
+                        # Note: Error logging is handled in place_option_order function
                     except Exception as e:
                         print(f"[Sell Exit] Error placing exit order: {str(e)}")
                         write_to_order_logs(f"EXIT ORDER ERROR: SELL {option_symbol} | Error: {str(e)}")
                         traceback.print_exc()
                 
+                # Log exit and update position
+                write_to_order_logs(f"ORDER EXITED: SELL position | Symbol: {future_symbol} | Option: {option_symbol} | Supertrend: {prev_supertrend_trend} -> {supertrend_trend}")
+                
                 # Exit sell position
                 trading_state['position'] = None
-                trading_state['exit_on_candle'] = True  # Prevent entry on this candle
-                trading_state['last_exit_candle_date'] = current_candle_date  # Track which candle we exited on
                 trading_state['option_symbol'] = None  # Clear option symbol
                 trading_state['option_exchange'] = None  # Clear exchange
                 trading_state['option_order_id'] = None  # Clear order ID
                 save_trading_state()  # Save state after position change
                 
-                log_msg = (
-                    f"EXIT SELL | Symbol: {future_symbol} | "
-                    f"Price: {ha_close:.2f} | Volume: {volume:.0f} | "
-                    f"Supertrend: {prev_supertrend_trend} -> {supertrend_trend} | "
-                    f"HA_Close: {ha_close:.2f} | HA_High: {ha_high:.2f} | HA_Low: {ha_low:.2f} | "
-                    f"KC1_Upper: {kc1_upper:.2f} | KC1_Lower: {kc1_lower:.2f} | "
-                    f"KC2_Upper: {kc2_upper:.2f} | KC2_Lower: {kc2_lower:.2f} | "
-                    f"Supertrend_Value: {supertrend:.2f}"
-                )
-                if option_symbol:
-                    log_msg += f" | Exited Option: {option_symbol}"
-                write_to_order_logs(log_msg)
-                return  # Exit early, no entry on exit candle
+                # Continue to check for new entry conditions on same candle (don't return)
         
         # ========== ARMED CONDITIONS (Can be set even when position exists) ==========
         # ========== ARMED BUY CONDITION ==========
-        # Armed Buy: HA candle low <= both lower Keltner bands
-        if ha_low <= kc1_lower and ha_low <= kc2_lower:
+        # Armed Buy: HA candle low < outer KC lower band (KC1_lower - outer band) - evaluated on candle close
+        if ha_low < kc1_lower:
             if not trading_state.get('armed_buy', False):
                 trading_state['armed_buy'] = True
                 log_msg = (
                     f"ARMED BUY | Symbol: {future_symbol} | "
-                    f"HA_Low: {ha_low:.2f} <= KC1_Lower: {kc1_lower:.2f} AND KC2_Lower: {kc2_lower:.2f} | "
+                    f"HA_Low: {ha_low:.2f} < KC1_Lower (Outer): {kc1_lower:.2f} | "
                     f"HA_Close: {ha_close:.2f} | Volume: {volume:.0f}"
                 )
                 write_to_order_logs(log_msg)
         
         # ========== ARMED SELL CONDITION ==========
-        # Armed Sell: HA candle high >= both upper Keltner bands
-        if ha_high >= kc1_upper and ha_high >= kc2_upper:
-            if not trading_state.get('armed_sell', False):
-                trading_state['armed_sell'] = True
-                log_msg = (
-                    f"ARMED SELL | Symbol: {future_symbol} | "
-                    f"HA_High: {ha_high:.2f} >= KC1_Upper: {kc1_upper:.2f} AND KC2_Upper: {kc2_upper:.2f} | "
-                    f"HA_Close: {ha_close:.2f} | Volume: {volume:.0f}"
-                )
-                write_to_order_logs(log_msg)
+        # Armed Sell: When BUY position exists, arm SELL if high >= outer KC upper band (KC1_upper - outer band) - evaluated on candle close
+        if current_position == 'BUY':
+            if ha_high >= kc1_upper:
+                if not trading_state.get('armed_sell', False):
+                    trading_state['armed_sell'] = True
+                    log_msg = (
+                        f"ARMED SELL | Symbol: {future_symbol} | "
+                        f"HA_High: {ha_high:.2f} >= KC1_Upper (Outer): {kc1_upper:.2f} | "
+                        f"HA_Close: {ha_close:.2f} | Volume: {volume:.0f} | "
+                        f"Note: BUY position active, SELL entry will wait for BUY exit"
+                    )
+                    write_to_order_logs(log_msg)
+        else:
+            # If no position, arm SELL when high >= outer KC upper band (KC1_upper - outer band) - evaluated on candle close
+            if ha_high >= kc1_upper:
+                if not trading_state.get('armed_sell', False):
+                    trading_state['armed_sell'] = True
+                    log_msg = (
+                        f"ARMED SELL | Symbol: {future_symbol} | "
+                        f"HA_High: {ha_high:.2f} >= KC1_Upper (Outer): {kc1_upper:.2f} | "
+                        f"HA_Close: {ha_close:.2f} | Volume: {volume:.0f}"
+                    )
+                    write_to_order_logs(log_msg)
         
         # ========== ARMED BUY RESET ==========
         # Reset Armed Buy: candle's high > both upper Keltner bands
@@ -1706,14 +1683,14 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                 )
                 write_to_order_logs(log_msg)
         
-        # ========== ENTRY CONDITIONS (Only if no position and not on exit candle) ==========
-        # Entry trades are blocked if position already exists - must exit first
-        if current_position is None and not trading_state.get('exit_on_candle', False):
+        # ========== ENTRY CONDITIONS (Only if no position) ==========
+        # If position exists, silently skip entry (no log, no order)
+        if current_position is None:
             
             # ========== BUY ENTRY ==========
-            # Buy Entry: Armed Buy AND HA close > both lower Keltner bands AND volume > VolumeMA
+            # Buy Entry: Armed Buy AND any candle close > inner KC lower band (KC2_lower - inner band) AND volume > VolumeMA
             if trading_state.get('armed_buy', False):
-                if ha_close > kc1_lower and ha_close > kc2_lower:
+                if ha_close > kc2_lower:
                     if volume_ma is not None and volume > volume_ma:
                         # Get settings for delta-based option selection
                         params = result_dict.get(unique_key, {})
@@ -1788,6 +1765,7 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         
                         # Place BUY order for CALL option
                         order_response = None
+                        order_error = None
                         if selected_option and kite_client:
                             try:
                                 lotsize = int(params.get('Lotsize', 1))
@@ -1816,14 +1794,21 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                                     trading_state['option_exchange'] = option_exchange
                                     trading_state['option_order_id'] = order_response.get('order_id', None)
                                     write_to_order_logs(f"ORDER PLACED: BUY {selected_option['option_symbol']} | Order ID: {order_response.get('order_id', 'N/A')} | Quantity: {lotsize} | Exchange: {option_exchange}")
-                                # Note: Error logging is now handled in place_option_order function
+                                else:
+                                    # Order failed - error already logged by place_option_order, but capture for entry log
+                                    order_error = "Order placement failed - check previous ORDER FAILED log for details"
                             except Exception as e:
                                 print(f"[Buy Entry] Error placing order: {str(e)}")
+                                order_error = f"Exception: {str(e)}"
                                 write_to_order_logs(f"ORDER ERROR: BUY {selected_option['option_symbol']} | Exception: {str(e)}")
                                 traceback.print_exc()
                         
-                        # Take buy position
+                        # Always set position when entry conditions are met (regardless of order success)
                         trading_state['position'] = 'BUY'
+                        if order_response:
+                            trading_state['option_symbol'] = selected_option['option_symbol']
+                            trading_state['option_exchange'] = option_exchange
+                            trading_state['option_order_id'] = order_response.get('order_id', None)
                         # Keep armed_buy = True to allow re-entry after exit if conditions still met
                         save_trading_state()  # Save state after position change
                         
@@ -1848,12 +1833,19 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         else:
                             log_msg += " | Option Selection: Failed or not available"
                         
+                        # Add order status and rejection reason if order failed
+                        if order_response:
+                            log_msg += f" | Order Status: PLACED | Order ID: {order_response.get('order_id', 'N/A')}"
+                        else:
+                            log_msg += f" | Order Status: REJECTED | Rejection Reason: {order_error if order_error else 'Order placement failed'}"
+                        
                         write_to_order_logs(log_msg)
             
             # ========== SELL ENTRY ==========
-            # Sell Entry: Armed Sell AND HA close < both upper Keltner bands AND volume > VolumeMA
+            # Sell Entry: Armed Sell AND current candle close < inner KC upper band (KC2_upper - inner band) AND volume > VolumeMA
             if trading_state.get('armed_sell', False):
-                if ha_close < kc1_upper and ha_close < kc2_upper:
+                # Use current candle close for SELL entry check
+                if ha_close < kc2_upper:
                     if volume_ma is not None and volume > volume_ma:
                         # Get settings for delta-based option selection
                         params = result_dict.get(unique_key, {})
@@ -1928,6 +1920,7 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         
                         # Place BUY order for PUT option
                         order_response = None
+                        order_error = None
                         if selected_option and kite_client:
                             try:
                                 lotsize = int(params.get('Lotsize', 1))
@@ -1956,14 +1949,21 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                                     trading_state['option_exchange'] = option_exchange
                                     trading_state['option_order_id'] = order_response.get('order_id', None)
                                     write_to_order_logs(f"ORDER PLACED: BUY {selected_option['option_symbol']} | Order ID: {order_response.get('order_id', 'N/A')} | Quantity: {lotsize} | Exchange: {option_exchange}")
-                                # Note: Error logging is now handled in place_option_order function
+                                else:
+                                    # Order failed - error already logged by place_option_order, but capture for entry log
+                                    order_error = "Order placement failed - check previous ORDER FAILED log for details"
                             except Exception as e:
                                 print(f"[Sell Entry] Error placing order: {str(e)}")
+                                order_error = f"Exception: {str(e)}"
                                 write_to_order_logs(f"ORDER ERROR: BUY {selected_option['option_symbol']} | Exception: {str(e)}")
                                 traceback.print_exc()
                         
-                        # Take sell position
+                        # Always set position when entry conditions are met (regardless of order success)
                         trading_state['position'] = 'SELL'
+                        if order_response:
+                            trading_state['option_symbol'] = selected_option['option_symbol']
+                            trading_state['option_exchange'] = option_exchange
+                            trading_state['option_order_id'] = order_response.get('order_id', None)
                         # Keep armed_sell = True to allow re-entry after exit if conditions still met
                         save_trading_state()  # Save state after position change
                         
@@ -1988,34 +1988,13 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         else:
                             log_msg += " | Option Selection: Failed or not available"
                         
+                        # Add order status and rejection reason if order failed
+                        if order_response:
+                            log_msg += f" | Order Status: PLACED | Order ID: {order_response.get('order_id', 'N/A')}"
+                        else:
+                            log_msg += f" | Order Status: REJECTED | Rejection Reason: {order_error if order_error else 'Order placement failed'}"
+                        
                         write_to_order_logs(log_msg)
-        
-        # ========== ENTRY BLOCKED DUE TO EXISTING POSITION ==========
-        # Log when entry conditions are met but blocked because position already exists
-        if current_position is not None:
-            # Check if BUY entry conditions are met but blocked
-            if trading_state.get('armed_buy', False):
-                if ha_close > kc1_lower and ha_close > kc2_lower:
-                    if volume_ma is not None and volume > volume_ma:
-                        write_to_order_logs(
-                            f"BUY ENTRY BLOCKED | Symbol: {future_symbol} | "
-                            f"Reason: Existing {current_position} position | "
-                            f"HA_Close: {ha_close:.2f} > KC1_Lower: {kc1_lower:.2f} AND KC2_Lower: {kc2_lower:.2f} | "
-                            f"Volume: {volume:.0f} > VolumeMA: {volume_ma:.0f} | "
-                            f"Must exit {current_position} position first"
-                        )
-            
-            # Check if SELL entry conditions are met but blocked
-            if trading_state.get('armed_sell', False):
-                if ha_close < kc1_upper and ha_close < kc2_upper:
-                    if volume_ma is not None and volume > volume_ma:
-                        write_to_order_logs(
-                            f"SELL ENTRY BLOCKED | Symbol: {future_symbol} | "
-                            f"Reason: Existing {current_position} position | "
-                            f"HA_Close: {ha_close:.2f} < KC1_Upper: {kc1_upper:.2f} AND KC2_Upper: {kc2_upper:.2f} | "
-                            f"Volume: {volume:.0f} > VolumeMA: {volume_ma:.0f} | "
-                            f"Must exit {current_position} position first"
-                        )
         
     except Exception as e:
         error_msg = f"Error in execute_trading_strategy for {symbol}: {str(e)}"
