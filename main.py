@@ -1259,15 +1259,17 @@ def find_option_with_max_delta(
                     option_ltp_float = float(option_ltp_raw)
                     option_ltp_display = f"{option_ltp_float:.2f}"
                 
-                # Calculate IV using py_vollib from option market price
+                # Calculate IV using py_vollib from option market price - NO DEFAULT IV
                 iv = None
                 iv_source = "N/A"
+                
+                # Must have valid option LTP to calculate IV
                 if option_ltp_float is not None and option_ltp_float > 0:
                     try:
                         # Convert option_type to py_vollib format: 'c' for call, 'p' for put
                         flag = 'c' if option_type == 'CE' else 'p'
                         
-                        # Calculate implied volatility from market price
+                        # Calculate implied volatility from market price using py_vollib
                         iv = implied_volatility(
                             price=option_ltp_float,
                             S=ltp,
@@ -1278,25 +1280,60 @@ def find_option_with_max_delta(
                         )
                         iv_source = "py_vollib"
                     except Exception as iv_error:
-                        # If IV calculation fails, try to get from API quote
-                        iv_from_api = quote.get('iv', None)
-                        if iv_from_api is not None:
-                            iv = iv_from_api / 100.0 if iv_from_api > 1 else iv_from_api
-                            iv_source = "API"
-                        else:
-                            # Fallback to default 20% if calculation fails and API doesn't provide
-                            iv = 0.20
-                            iv_source = "Default (IV calc failed)"
-                        print(f"[Max Delta] Warning: IV calculation failed for {option_symbol}: {str(iv_error)}")
+                        # If py_vollib calculation fails, try to get fresh LTP and retry once
+                        error_msg = f"IV CALCULATION FAILED | Strike: {strike} | Symbol: {option_symbol} | Initial LTP: {option_ltp_float:.2f} | Error: {str(iv_error)} | Attempting fresh LTP fetch..."
+                        print(f"[Max Delta] {error_msg}")
+                        write_to_order_logs(error_msg)
+                        try:
+                            # Get fresh quote to retry with updated LTP
+                            fresh_quote = get_option_quote(kite, exchange, option_symbol)
+                            fresh_ltp = fresh_quote.get('last_price', None)
+                            if fresh_ltp is not None:
+                                fresh_ltp_float = float(fresh_ltp)
+                                if fresh_ltp_float > 0:
+                                    # Retry IV calculation with fresh LTP
+                                    iv = implied_volatility(
+                                        price=fresh_ltp_float,
+                                        S=ltp,
+                                        K=float(strike),
+                                        t=time_to_expiry,
+                                        r=risk_free_rate,
+                                        flag=flag
+                                    )
+                                    iv_source = "py_vollib"
+                                    option_ltp_float = fresh_ltp_float  # Update LTP for delta calculation
+                                    option_ltp_display = f"{fresh_ltp_float:.2f}"
+                                    success_msg = f"IV CALCULATION RETRY SUCCESS | Strike: {strike} | Symbol: {option_symbol} | Fresh LTP: {fresh_ltp_float:.2f} | Calculated IV: {iv*100:.2f}%"
+                                    print(f"[Max Delta] {success_msg}")
+                                    write_to_order_logs(success_msg)
+                                else:
+                                    skip_msg = f"STRIKE SKIPPED | Strike: {strike} | Symbol: {option_symbol} | Reason: Fresh LTP is zero or invalid"
+                                    print(f"[Max Delta] {skip_msg}")
+                                    write_to_order_logs(skip_msg)
+                                    continue
+                            else:
+                                skip_msg = f"STRIKE SKIPPED | Strike: {strike} | Symbol: {option_symbol} | Reason: No fresh LTP available for retry"
+                                print(f"[Max Delta] {skip_msg}")
+                                write_to_order_logs(skip_msg)
+                                continue
+                        except Exception as retry_error:
+                            skip_msg = f"STRIKE SKIPPED | Strike: {strike} | Symbol: {option_symbol} | Reason: IV calculation retry failed | Retry Error: {str(retry_error)}"
+                            print(f"[Max Delta] {skip_msg}")
+                            write_to_order_logs(skip_msg)
+                            continue
                 else:
-                    # If option LTP not available, try API IV or use default
-                    iv_from_api = quote.get('iv', None)
-                    if iv_from_api is not None:
-                        iv = iv_from_api / 100.0 if iv_from_api > 1 else iv_from_api
-                        iv_source = "API"
-                    else:
-                        iv = 0.20
-                        iv_source = "Default (No LTP)"
+                    # No LTP available - skip this strike
+                    skip_msg = f"STRIKE SKIPPED | Strike: {strike} | Symbol: {option_symbol} | Reason: No option LTP available for IV calculation"
+                    print(f"[Max Delta] {skip_msg}")
+                    write_to_order_logs(skip_msg)
+                    continue
+                
+                # If IV still not calculated, skip this strike
+                if iv is None or iv <= 0:
+                    skip_msg = f"STRIKE SKIPPED | Strike: {strike} | Symbol: {option_symbol} | Reason: IV calculation failed (IV is None or <= 0)"
+                    print(f"[Max Delta] {skip_msg}")
+                    write_to_order_logs(skip_msg)
+                    continue
                 
                 # Calculate delta using py_vollib
                 delta = None
