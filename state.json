@@ -1,10 +1,10 @@
 {
-  "last_updated": "2025-11-18T23:28:04.554038",
+  "last_updated": "2025-11-20T14:21:01.479597",
   "trading_states": {
     "CRUDEOIL_25-12-2025": {
-      "position": "SELL",
-      "armed_buy": false,
-      "armed_sell": true,
+      "position": "BUY",
+      "armed_buy": true,
+      "armed_sell": false,
       "exit_on_candle": false,
       "last_exit_candle_date": null,
       "option_symbol": null,

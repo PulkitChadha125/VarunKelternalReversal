@@ -1507,16 +1507,13 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
         # Get previous candle for trend change detection and entry conditions
         prev_row = None
         prev_ha_close = None
-        prev_ha_open = None
         if df.height >= 2:
             prev_row = df.tail(2).row(0, named=True)  # Second to last row
             prev_supertrend_trend = prev_row.get('supertrend_trend', None)
             prev_ha_close = prev_row.get('ha_close', None)
-            prev_ha_open = prev_row.get('ha_open', None)
         else:
             prev_supertrend_trend = None
             prev_ha_close = None
-            prev_ha_open = None
         
         # ========== EXIT CONDITIONS (Check first before entry) ==========
         current_position = trading_state.get('position', None)
@@ -1701,22 +1698,9 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
             
             # ========== BUY ENTRY ==========
             # Buy Entry: Armed Buy AND any candle close > inner KC lower band (KC2_lower - inner band) AND volume > VolumeMA
-            # AND previous HA candle must be GREEN (prev_ha_close > prev_ha_open)
             if trading_state.get('armed_buy', False):
                 if ha_close > kc2_lower:
                     if volume_ma is not None and volume > volume_ma:
-                        # Check if previous HA candle is GREEN (ha_close > ha_open)
-                        prev_candle_green = False
-                        if prev_ha_close is not None and prev_ha_open is not None:
-                            prev_candle_green = prev_ha_close > prev_ha_open
-                        else:
-                            # If previous candle not available, skip entry
-                            print(f"[Buy Entry] Previous HA candle data not available, skipping entry")
-                            return
-                        
-                        if not prev_candle_green:
-                            print(f"[Buy Entry] Previous HA candle is RED (Close: {prev_ha_close:.2f} <= Open: {prev_ha_open:.2f}), skipping entry")
-                            return
                         # Get settings for delta-based option selection
                         params = result_dict.get(unique_key, {})
                         strike_step = int(params.get('StrikeStep', 50))
@@ -1868,23 +1852,10 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
             
             # ========== SELL ENTRY ==========
             # Sell Entry: Armed Sell AND current candle close < inner KC upper band (KC2_upper - inner band) AND volume > VolumeMA
-            # AND previous HA candle must be RED (prev_ha_close < prev_ha_open)
             if trading_state.get('armed_sell', False):
                 # Use current candle close for SELL entry check
                 if ha_close < kc2_upper:
                     if volume_ma is not None and volume > volume_ma:
-                        # Check if previous HA candle is RED (ha_close < ha_open)
-                        prev_candle_red = False
-                        if prev_ha_close is not None and prev_ha_open is not None:
-                            prev_candle_red = prev_ha_close < prev_ha_open
-                        else:
-                            # If previous candle not available, skip entry
-                            print(f"[Sell Entry] Previous HA candle data not available, skipping entry")
-                            return
-                        
-                        if not prev_candle_red:
-                            print(f"[Sell Entry] Previous HA candle is GREEN (Close: {prev_ha_close:.2f} >= Open: {prev_ha_open:.2f}), skipping entry")
-                            return
                         # Get settings for delta-based option selection
                         params = result_dict.get(unique_key, {})
                         strike_step = int(params.get('StrikeStep', 50))

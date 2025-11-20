@@ -65,13 +65,15 @@ def login(
             "request_token not provided. To auto-login, provide user_id, password, and totp_secret."
         )
 
-    # Setup headless Chrome (prefer Selenium Manager if no path provided)
+    # Setup Chrome (visible browser for debugging)
     try:
         options = Options()
-        if headless:
-            options.add_argument("--headless=new")
+        # Always show browser so user can see what's happening
+        # if headless:
+        #     options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--start-maximized")  # Maximize window for better visibility
 
         # Create driver and open login page
         if chromedriver_path:
@@ -114,147 +116,290 @@ def login(
             print("[Zerodha] Clicked login. Waiting 2s for 2FA screen...")
             time.sleep(2)
 
-            # Wait and enter TOTP/PIN - target numeric 6-digit field; avoid selecting the password field
-            pin_el = None
-            last_err = None
-            try:
-                # Most reliable: 6-digit numeric field
-                pin_el = WebDriverWait(driver, 20).until(
-                    EC.visibility_of_element_located((By.XPATH, "//input[@type='number' and @maxlength='6']"))
-                )
-            except Exception as e:
-                last_err = e
-                # exhaustive fallbacks (explicit 2FA container path first)
+            # Wait for TOTP/PIN field to appear and enter TOTP using Selenium
+            totp = pyotp.TOTP(totp_secret)
+            token = str(totp.now()).zfill(6)
+            print(f"[Zerodha] Ready to enter TOTP: {token}. Waiting 5s for page stability (browser is visible - you can watch)...")
+            time.sleep(5)  # Longer wait so user can see what's happening
+            
+            # Helper function to find PIN element with retry
+            def find_pin_element(max_wait=10):
+                """Find TOTP/PIN input element using multiple locators"""
                 pin_locators = [
-                    (By.XPATH, '//*[@id="container"]/div[2]/div/div[2]/form/div[1]/input'),
-                    (By.XPATH, '/html/body/div[1]/div/div[2]/div[1]/div[2]/div/div[2]/form/div[1]/input'),
+                    (By.XPATH, "//input[@type='number' and @maxlength='6']"),
+                    (By.XPATH, "//input[@type='text' and @maxlength='6']"),
                     (By.ID, 'pin'),
                     (By.NAME, 'pin'),
                     (By.CSS_SELECTOR, 'input#pin'),
-                    (By.CSS_SELECTOR, "input[placeholder='••••••']"),
+                    (By.CSS_SELECTOR, "input[placeholder*='•••']"),
+                    (By.XPATH, '//*[@id="container"]/div[2]/div/div[2]/form/div[1]/input'),
                 ]
-                for by, sel in pin_locators:
+                
+                for by, selector in pin_locators:
                     try:
-                        candidate = WebDriverWait(driver, 10).until(EC.visibility_of_element_located((by, sel)))
-                        # Avoid password field
-                        cid = (candidate.get_attribute('id') or '').lower()
-                        cname = (candidate.get_attribute('name') or '').lower()
-                        itype = (candidate.get_attribute('type') or '').lower()
-                        if cid == 'password' or cname == 'password':
-                            continue
-                        pin_el = candidate
-                        if pin_el:
-                            break
-                    except Exception as e2:
-                        last_err = e2
+                        element = WebDriverWait(driver, max_wait).until(
+                            EC.presence_of_element_located((by, selector))
+                        )
+                        # Verify it's visible and not the password field
+                        if element.is_displayed():
+                            el_id = (element.get_attribute('id') or '').lower()
+                            el_name = (element.get_attribute('name') or '').lower()
+                            if el_id != 'password' and el_name != 'password':
+                                return element
+                    except Exception:
                         continue
-            if pin_el is None:
-                try:
-                    driver.save_screenshot("zerodha_login_no_pin.png")
-                    Path("zerodha_login_no_pin.html").write_text(driver.page_source or "", encoding="utf-8")
-                except Exception:
-                    pass
-                raise Exception(f"Unable to locate TOTP/PIN field. Last error: {last_err}")
-            # Some UIs have 1 input; others split into 6 boxes. Handle both.
-            totp = pyotp.TOTP(totp_secret)
-            token = totp.now()
-            print("[Zerodha] Ready to enter TOTP. Waiting 2s so you can observe...")
-            time.sleep(2)
-            try:
-                # Try multiple inputs first
-                # Focus the element first (helps some numeric inputs)
-                try:
-                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", pin_el)
-                    pin_el.click()
-                except Exception:
-                    pass
-
-                otp_inputs = driver.find_elements(By.CSS_SELECTOR, 'input[type="password"]')
-                otp_inputs = [el for el in otp_inputs if el.is_displayed() and el.is_enabled()]
-                if len(otp_inputs) >= 4 and len(token) >= 4:
-                    for i, ch in enumerate(token[:len(otp_inputs)]):
-                        otp_inputs[i].clear()
-                        otp_inputs[i].send_keys(ch)
-                    # Press Enter on last box
-                    otp_inputs[min(len(otp_inputs)-1, len(token)-1)].send_keys(Keys.ENTER)
-                else:
+                return None
+            
+            # Function to enter TOTP with Selenium (with retry on stale elements)
+            def enter_totp_selenium(max_retries=5):
+                """Enter TOTP using Selenium with retry logic"""
+                for attempt in range(max_retries):
                     try:
-                        pin_el.clear()
+                        # Check if we're already on the success page (redirect already happened)
+                        current_url = driver.current_url
+                        if "request_token=" in current_url:
+                            print(f"[Zerodha] Already redirected! Found request_token in URL. Skipping TOTP entry.")
+                            return True
+                        
+                        print(f"[Zerodha] TOTP entry attempt {attempt + 1}/{max_retries}...")
+                        time.sleep(2)  # Wait between attempts
+                        
+                        # Check for multiple OTP input boxes first
+                        try:
+                            otp_inputs = WebDriverWait(driver, 5).until(
+                                lambda d: [el for el in d.find_elements(By.CSS_SELECTOR, 'input[type="password"]') 
+                                          if el.is_displayed() and el.is_enabled() and 
+                                          el.get_attribute('id') != 'password' and 
+                                          el.get_attribute('name') != 'password']
+                            )
+                            
+                            if len(otp_inputs) >= 4 and len(token) >= 4:
+                                print(f"[Zerodha] Detected {len(otp_inputs)} separate OTP input boxes")
+                                for i, ch in enumerate(token[:min(len(otp_inputs), len(token))]):
+                                    # Re-locate inputs fresh for each character
+                                    fresh_inputs = WebDriverWait(driver, 3).until(
+                                        lambda d: [el for el in d.find_elements(By.CSS_SELECTOR, 'input[type="password"]') 
+                                                  if el.is_displayed() and el.is_enabled()]
+                                    )
+                                    if i < len(fresh_inputs):
+                                        fresh_inputs[i].clear()
+                                        fresh_inputs[i].send_keys(ch)
+                                        time.sleep(0.3)  # Small delay between inputs
+                                
+                                # Press Enter on last box
+                                final_inputs = WebDriverWait(driver, 3).until(
+                                    lambda d: [el for el in d.find_elements(By.CSS_SELECTOR, 'input[type="password"]') 
+                                              if el.is_displayed() and el.is_enabled()]
+                                )
+                                if final_inputs:
+                                    last_idx = min(len(final_inputs)-1, len(token)-1)
+                                    final_inputs[last_idx].send_keys(Keys.ENTER)
+                                print("[Zerodha] TOTP entered into multiple input boxes")
+                                
+                                # Wait a bit and check if redirect happened
+                                time.sleep(2)
+                                if "request_token=" in driver.current_url:
+                                    print("[Zerodha] Redirect detected after TOTP entry!")
+                                    return True
+                                return True
+                        except Exception:
+                            # Not multiple boxes, try single input
+                            pass
+                        
+                        # Single input field approach
+                        print("[Zerodha] Trying single input field for TOTP...")
+                        pin_el = find_pin_element(max_wait=5)
+                        
+                        if pin_el is None:
+                            # Check if redirect already happened while we were looking
+                            if "request_token=" in driver.current_url:
+                                print("[Zerodha] Redirect detected! No need to enter TOTP.")
+                                return True
+                            raise Exception("Could not locate TOTP/PIN input field")
+                        
+                        # Clear and enter TOTP
+                        try:
+                            pin_el.clear()
+                        except Exception:
+                            pass
+                        
+                        pin_el.send_keys(token)
+                        print(f"[Zerodha] Entered TOTP: {token}")
+                        time.sleep(1)
+                        
+                        # Press Enter
+                        pin_el.send_keys(Keys.ENTER)
+                        print("[Zerodha] Pressed Enter after TOTP entry")
+                        
+                        # Wait a bit and check if redirect happened
+                        time.sleep(2)
+                        if "request_token=" in driver.current_url:
+                            print("[Zerodha] Redirect detected after TOTP entry!")
+                            return True
+                        
+                        return True
+                        
+                    except Exception as e:
+                        error_msg = str(e)
+                        
+                        # Check if redirect happened despite the error
+                        if "request_token=" in driver.current_url:
+                            print("[Zerodha] Redirect detected despite error! Continuing...")
+                            return True
+                        
+                        if "stale element" in error_msg.lower():
+                            print(f"[Zerodha] Stale element detected, will retry...")
+                        else:
+                            print(f"[Zerodha] Error: {error_msg[:100]}")
+                        
+                        if attempt < max_retries - 1:
+                            print(f"[Zerodha] Retrying in 3s...")
+                            time.sleep(3)
+                            continue
+                        else:
+                            raise Exception(f"Failed after {max_retries} attempts. Last error: {error_msg}")
+            
+            # Enter TOTP
+            try:
+                enter_totp_selenium()
+            except Exception as e:
+                # Check if redirect happened despite the exception
+                if "request_token=" in driver.current_url:
+                    print("[Zerodha] Redirect detected! Continuing despite exception.")
+                else:
+                    print(f"[Zerodha] TOTP entry failed: {e}")
+                    print("[Zerodha] Browser will remain open for 30s so you can manually enter TOTP if needed...")
+                    time.sleep(30)  # Give user time to manually enter if needed
+                    raise
+            
+            # Check if we're already on the success page
+            if "request_token=" in driver.current_url:
+                print("[Zerodha] Already on success page! Skipping continue button click.")
+            else:
+                print("[Zerodha] Entered TOTP. Waiting 2s before checking for continue button...")
+                time.sleep(2)
+
+                # If there's a submit/continue button after PIN, click it
+                cont_locators = [
+                    (By.XPATH, '//*[@id="container"]/div[2]/div/div[2]/form/div[2]/button'),  # explicit continue
+                    (By.CSS_SELECTOR, 'button[type="submit"]'),
+                    (By.XPATH, '//*[@id="container"]/div[2]/div/div[2]/form//button'),
+                    (By.XPATH, '//form//button[@type="submit"]'),
+                ]
+                clicked = False
+                for by, sel in cont_locators:
+                    try:
+                        cont_btn = driver.find_element(by, sel)
+                        cont_btn.click()
+                        clicked = True
+                        break
+                    except Exception:
+                        continue
+                
+                # JavaScript fallback for button click (more reliable on servers)
+                if not clicked:
+                    try:
+                        result = driver.execute_script("""
+                            var btn = document.querySelector('button[type="submit"]') || 
+                                     document.querySelector('#container button') ||
+                                     document.querySelector('form button');
+                            if (btn && btn.offsetParent !== null) {
+                                btn.click();
+                                return true;
+                            }
+                            return false;
+                        """)
+                        if result:
+                            clicked = True
+                            print("[Zerodha] Clicked continue button via JavaScript")
                     except Exception:
                         pass
-                    pin_el.send_keys(token)
-                    pin_el.send_keys(Keys.ENTER)
-            except Exception:
-                try:
-                    pin_el.clear()
-                except Exception:
-                    pass
-                pin_el.send_keys(token)
-                pin_el.send_keys(Keys.ENTER)
-            print("[Zerodha] Entered TOTP. Waiting 2s before continuing...")
-            time.sleep(2)
+                
+                if clicked:
+                    print("[Zerodha] Clicked continue. Waiting 2s for redirect...")
+                else:
+                    print("[Zerodha] No continue button found, waiting 2s for redirect...")
+                time.sleep(2)
 
-            # If there's a submit/continue button after PIN, click it
+            # Define continue button locators (used in retry section)
             cont_locators = [
                 (By.XPATH, '//*[@id="container"]/div[2]/div/div[2]/form/div[2]/button'),  # explicit continue
                 (By.CSS_SELECTOR, 'button[type="submit"]'),
                 (By.XPATH, '//*[@id="container"]/div[2]/div/div[2]/form//button'),
                 (By.XPATH, '//form//button[@type="submit"]'),
             ]
-            for by, sel in cont_locators:
-                try:
-                    cont_btn = driver.find_element(by, sel)
-                    cont_btn.click()
-                    break
-                except Exception:
-                    continue
-            print("[Zerodha] Clicked continue. Waiting 2s for redirect...")
-            time.sleep(2)
-
+            
             # Wait for redirect URL containing request_token (retry once if needed)
-            try:
-                wait.until(lambda d: "request_token=" in d.current_url)
-            except Exception:
-                # Retry once with a fresh TOTP in case the first expired
+            # First check if we're already on the success page
+            if "request_token=" in driver.current_url:
+                print("[Zerodha] Already on success page! No need to wait for redirect.")
+            else:
                 try:
-                    pin_el.clear()
+                    wait.until(lambda d: "request_token=" in d.current_url)
+                    print("[Zerodha] Redirect detected!")
                 except Exception:
-                    pass
-                # Re-locate pin field if needed (prefer numeric 6-digit field; avoid password)
-                try:
-                    pin_el = WebDriverWait(driver, 10).until(
-                        EC.visibility_of_element_located((By.XPATH, "//input[@type='number' and @maxlength='6']"))
-                    )
-                except Exception:
-                    try:
-                        pin_el = WebDriverWait(driver, 10).until(
-                            EC.visibility_of_element_located((By.XPATH, '//*[@id="container"]/div[2]/div/div[2]/form/div[1]/input'))
-                        )
-                    except Exception:
+                    # Check one more time before retrying
+                    if "request_token=" in driver.current_url:
+                        print("[Zerodha] Redirect detected on second check!")
+                    else:
+                        # Retry once with a fresh TOTP in case the first expired
+                        print("[Zerodha] No redirect detected, retrying TOTP entry with fresh token...")
+                        token = str(pyotp.TOTP(totp_secret).now()).zfill(6)
+                        print(f"[Zerodha] New TOTP: {token}")
                         try:
-                            pin_el = driver.find_element(By.ID, 'pin')
-                        except Exception:
-                            try:
-                                pin_el = driver.find_element(By.CSS_SELECTOR, "input[placeholder='••••••']")
-                            except Exception:
-                                pin_el = driver.find_element(By.XPATH, "//input[@type='password']")
-                token = pyotp.TOTP(totp_secret).now()
-                try:
-                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", pin_el)
-                    pin_el.click()
-                except Exception:
-                    pass
-                pin_el.send_keys(token)
-                for by, sel in cont_locators:
-                    try:
-                        cont_btn = driver.find_element(by, sel)
-                        cont_btn.click()
-                        break
-                    except Exception:
-                        continue
-                wait.until(lambda d: "request_token=" in d.current_url)
-                print("[Zerodha] Retried TOTP. Waiting 2s for redirect...")
-                time.sleep(2)
+                            # Check URL again before retrying
+                            if "request_token=" in driver.current_url:
+                                print("[Zerodha] Redirect detected before retry! Skipping...")
+                            else:
+                                # Try to find and enter TOTP using Selenium
+                                pin_el = find_pin_element(max_wait=5)
+                                if pin_el:
+                                    try:
+                                        pin_el.clear()
+                                    except Exception:
+                                        pass
+                                    pin_el.send_keys(token)
+                                    time.sleep(1)
+                                    pin_el.send_keys(Keys.ENTER)
+                                    print("[Zerodha] Retried TOTP entry via Selenium")
+                                    
+                                    # Wait and check if redirect happened
+                                    time.sleep(2)
+                                    if "request_token=" in driver.current_url:
+                                        print("[Zerodha] Redirect detected after retry!")
+                                else:
+                                    print("[Zerodha] Could not find PIN field for retry")
+                        except Exception as retry_e:
+                            print(f"[Zerodha] TOTP retry failed: {retry_e}")
+                            # Check if redirect happened despite error
+                            if "request_token=" in driver.current_url:
+                                print("[Zerodha] Redirect detected despite error!")
+                            else:
+                                print("[Zerodha] Browser will remain open for 30s so you can manually enter TOTP...")
+                                time.sleep(30)
+                        
+                        # Click continue button if present (only if not redirected)
+                        if "request_token=" not in driver.current_url:
+                            clicked = False
+                            for by, sel in cont_locators:
+                                try:
+                                    cont_btn = driver.find_element(by, sel)
+                                    cont_btn.click()
+                                    clicked = True
+                                    break
+                                except Exception:
+                                    continue
+                            
+                            if clicked:
+                                print("[Zerodha] Clicked continue button. Waiting for redirect...")
+                                time.sleep(2)
+                            
+                            # Final check
+                            if "request_token=" in driver.current_url:
+                                print("[Zerodha] Redirect detected after continue button click!")
+                            else:
+                                print("[Zerodha] Still no redirect. Browser will remain open for 60s...")
+                                time.sleep(60)  # Give more time for manual intervention
 
             url = driver.current_url
             parsed_url = urlparse(url)
