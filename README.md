@@ -5,6 +5,7 @@ An automated trading bot for Zerodha that implements a Keltner Channel reversal 
 ## 📋 Table of Contents
 
 - [Features](#features)
+- [Quick Start - Server Deployment](#quick-start---server-deployment)
 - [Trading Strategy](#trading-strategy)
 - [Dependencies](#dependencies)
 - [Installation](#installation)
@@ -14,6 +15,48 @@ An automated trading bot for Zerodha that implements a Keltner Channel reversal 
 - [Trading Conditions](#trading-conditions)
 - [State Management](#state-management)
 - [Error Handling](#error-handling)
+
+## 🚀 Quick Start - Server Deployment
+
+### Files to Upload to Server
+
+**Essential Files (Upload These):**
+- ✅ `main.py` - Main trading bot
+- ✅ `zerodha_integration.py` - Zerodha API integration
+- ✅ `requirements.txt` - Python dependencies
+- ✅ `ZerodhaCredentials.csv` - Your credentials (create this)
+- ✅ `TradeSettings.csv` - Trading settings
+
+**Do NOT Upload (Auto-generated):**
+- ❌ `state.json`, `OrderLog.txt`, `data.csv`
+- ❌ `access_token.txt`, `request_token.txt`
+- ❌ `__pycache__/`, `chromedriver.exe`
+
+### Quick Server Setup
+
+```bash
+# 1. Upload files to server (use SCP/FTP)
+# 2. SSH into server
+ssh user@server
+cd /path/to/bot
+
+# 3. Create virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 4. Install dependencies
+pip install -r requirements.txt
+
+# 5. Install Chrome (if not installed)
+sudo apt-get install -y chromium-browser
+
+# 6. Run bot in background (using screen)
+screen -S trading_bot
+python3 main.py
+# Press Ctrl+A then D to detach
+```
+
+**See [Server Deployment](#server-deployment) section below for detailed instructions.**
 
 ## 🚀 Features
 
@@ -176,6 +219,8 @@ setuptools
 
 ## 🔧 Installation
 
+### Local Installation
+
 1. **Clone or download the project**
 
 2. **Create a virtual environment** (recommended):
@@ -199,6 +244,161 @@ setuptools
    ```
 
 5. **Configure credentials** (see Configuration section below)
+
+### Server Deployment
+
+#### Files to Upload to Server
+
+Upload the following **essential files** to your server:
+
+**Required Files:**
+```
+✅ main.py                      # Main trading bot script
+✅ zerodha_integration.py       # Zerodha API integration
+✅ requirements.txt             # Python dependencies
+✅ ZerodhaCredentials.csv       # Your Zerodha credentials (create this)
+✅ TradeSettings.csv            # Trading symbols and parameters
+✅ README.md                    # Documentation (optional but recommended)
+```
+
+**Files NOT to Upload (auto-generated):**
+```
+❌ state.json                   # Will be created automatically
+❌ OrderLog.txt                 # Will be created automatically
+❌ data.csv                     # Will be created automatically
+❌ access_token.txt             # Will be created automatically
+❌ request_token.txt            # Will be created automatically
+❌ __pycache__/                 # Python cache (not needed)
+❌ chromedriver.exe             # Selenium will auto-download
+```
+
+**Optional Files (for reference):**
+```
+📄 notes.txt                    # Documentation notes
+📄 verify_supertrend.py         # Testing scripts (if needed)
+```
+
+#### Server Setup Steps
+
+1. **Upload files to server**:
+   ```bash
+   # Using SCP (Linux/Mac)
+   scp main.py zerodha_integration.py requirements.txt ZerodhaCredentials.csv TradeSettings.csv user@server:/path/to/bot/
+   
+   # Or use FTP/SFTP client like FileZilla, WinSCP, etc.
+   ```
+
+2. **SSH into your server**:
+   ```bash
+   ssh user@server
+   cd /path/to/bot
+   ```
+
+3. **Create virtual environment**:
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
+
+4. **Install dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+5. **Verify Chrome/Chromium is installed** (required for Selenium):
+   ```bash
+   # For Ubuntu/Debian
+   sudo apt-get update
+   sudo apt-get install -y chromium-browser chromium-chromedriver
+   
+   # Or install Google Chrome
+   wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+   sudo dpkg -i google-chrome-stable_current_amd64.deb
+   sudo apt-get install -f
+   ```
+
+6. **Install display server** (for headless browser - if needed):
+   ```bash
+   # For Ubuntu/Debian
+   sudo apt-get install -y xvfb
+   ```
+
+7. **Test the bot**:
+   ```bash
+   python3 main.py
+   ```
+
+8. **Run as background service** (using screen or tmux):
+   ```bash
+   # Using screen
+   screen -S trading_bot
+   python3 main.py
+   # Press Ctrl+A then D to detach
+   
+   # To reattach later
+   screen -r trading_bot
+   
+   # Or using tmux
+   tmux new -s trading_bot
+   python3 main.py
+   # Press Ctrl+B then D to detach
+   
+   # To reattach later
+   tmux attach -t trading_bot
+   ```
+
+9. **Run as systemd service** (optional, for auto-start):
+   Create `/etc/systemd/system/trading-bot.service`:
+   ```ini
+   [Unit]
+   Description=Zerodha Trading Bot
+   After=network.target
+
+   [Service]
+   Type=simple
+   User=your_username
+   WorkingDirectory=/path/to/bot
+   Environment="PATH=/path/to/bot/.venv/bin"
+   ExecStart=/path/to/bot/.venv/bin/python3 /path/to/bot/main.py
+   Restart=always
+   RestartSec=10
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+   
+   Then enable and start:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable trading-bot
+   sudo systemctl start trading-bot
+   sudo systemctl status trading-bot
+   ```
+
+#### Server Requirements
+
+- **Python 3.8+** installed
+- **Chrome/Chromium** browser installed (for Selenium)
+- **Stable internet connection**
+- **Sufficient disk space** for logs and data files
+- **Screen/Tmux** or systemd for running in background
+
+#### Important Server Notes
+
+1. **Browser Visibility**: The bot runs with visible browser by default (for debugging). On server, you can modify `zerodha_integration.py` to use headless mode if needed.
+
+2. **File Permissions**: Ensure the bot has write permissions for:
+   - `state.json`
+   - `OrderLog.txt`
+   - `data.csv`
+   - `access_token.txt`
+   - `request_token.txt`
+
+3. **Timezone**: Ensure server timezone matches your trading timezone (IST for Indian markets).
+
+4. **Firewall**: Ensure ports are open for Zerodha API connections.
+
+5. **Monitoring**: Check `OrderLog.txt` regularly for errors and trading activity.
 
 ## ⚙️ Configuration
 
@@ -419,18 +619,23 @@ Check Armed SELL → If entry conditions met → SELL Entry (same candle)
 
 ```
 .
-├── main.py                      # Main trading bot script
-├── zerodha_integration.py       # Zerodha API integration functions
-├── requirements.txt             # Python dependencies
-├── README.md                   # This file
-├── ZerodhaCredentials.csv      # Zerodha API credentials (create this)
-├── TradeSettings.csv           # Trading symbols and parameters
-├── state.json                  # Trading state persistence (auto-generated)
-├── OrderLog.txt                # Trading event logs (auto-generated)
-├── data.csv                    # Processed historical data (auto-generated)
-├── access_token.txt            # Zerodha access token (auto-generated)
-└── request_token.txt           # Zerodha request token (auto-generated)
+├── main.py                      # ✅ Main trading bot script (UPLOAD TO SERVER)
+├── zerodha_integration.py       # ✅ Zerodha API integration (UPLOAD TO SERVER)
+├── requirements.txt             # ✅ Python dependencies (UPLOAD TO SERVER)
+├── README.md                   # 📄 Documentation (optional)
+├── ZerodhaCredentials.csv      # ✅ Zerodha API credentials (UPLOAD TO SERVER - create this)
+├── TradeSettings.csv           # ✅ Trading symbols and parameters (UPLOAD TO SERVER)
+├── state.json                  # ⚠️ Trading state persistence (auto-generated - DON'T UPLOAD)
+├── OrderLog.txt                # ⚠️ Trading event logs (auto-generated - DON'T UPLOAD)
+├── data.csv                    # ⚠️ Processed historical data (auto-generated - DON'T UPLOAD)
+├── access_token.txt            # ⚠️ Zerodha access token (auto-generated - DON'T UPLOAD)
+└── request_token.txt           # ⚠️ Zerodha request token (auto-generated - DON'T UPLOAD)
 ```
+
+**Legend:**
+- ✅ **Upload to Server**: Essential files needed for the bot to run
+- ⚠️ **Auto-generated**: Created automatically, don't upload (will be generated on server)
+- 📄 **Optional**: Nice to have but not required
 
 ## 📈 Trading Conditions Summary
 
