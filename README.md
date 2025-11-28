@@ -67,18 +67,19 @@ python3 main.py
   - Supertrend indicator
   - Volume Moving Average
 - **Delta-Based Option Selection**: Automatically selects options with maximum delta for optimal entry
+- **Pyramiding System**: Adds positions when price moves favorably by specified distance
 - **Re-entry Logic**: Can re-enter trades after exit if armed state is still active
 - **State Persistence**: Saves trading state to `state.json` for recovery after restart
 - **Auto-Login**: Automatic login at 9:00 AM daily
 - **Rate Limit Handling**: Automatically handles "too many requests" errors with re-login
 - **Candle-Based Execution**: Runs at precise candle boundaries (e.g., 14:30, 14:35, 14:40 for 5-minute timeframe)
-- **Comprehensive Logging**: All trading events logged to `OrderLog.txt`
+- **Comprehensive Logging**: All trading events logged to `OrderLog.txt` and `signal.csv`
 
 ## 📊 Trading Strategy
 
 ### Strategy Overview
 
-The bot implements a **Keltner Channel Reversal Strategy** that identifies potential reversal points when price moves outside the Keltner Channel bands and then reverses back inside.
+The bot implements a **Keltner Channel Reversal Strategy with Pyramiding** that identifies potential reversal points when price moves outside the Keltner Channel bands and then reverses back inside. The strategy includes a pyramiding system that adds positions when price moves favorably.
 
 **Important Note**: 
 - **KC1 = Outer Band** (wider channel)
@@ -140,22 +141,110 @@ The bot implements a **Keltner Channel Reversal Strategy** that identifies poten
 
 ### Position Management Rules
 
-- **One Position at a Time**: Only one position (BUY or SELL) can be active at any given time
+- **One Position Type at a Time**: Only one position type (BUY or SELL) can be active at any given time
+- **Multiple Positions via Pyramiding**: Can have multiple positions of the same type (BUY or SELL) through pyramiding
 - **Armed States Can Be Set Anytime**: Armed states (ARMED BUY/SELL) can be set even when a position already exists
 - **Entry Blocked with Existing Position**: Entry trades are **SILENTLY BLOCKED** if a position already exists - no log, no order, must exit first
 - **Immediate Re-entry After Exit**: After exit, immediately check armed status and entry conditions on the **same candle** (no waiting for next candle)
 - **Armed State Persistence**: Armed state remains active after entry (does not reset automatically)
 - **Armed State Reset**: Armed state resets only when opposite condition occurs (not when trade is taken)
-- **All Conditions on Candle Close**: All conditions (entry, exit, arm) are evaluated when a candle closes
+- **All Conditions on Candle Close**: All conditions (entry, exit, arm, pyramiding) are evaluated when a candle closes
 - **Volume Confirmation**: Entry requires volume to be above the Volume Moving Average
 - **Order Status Logging**: Position is set regardless of order success/failure, broker status (PLACED/REJECTED) is logged
+- **All Positions Exit Together**: When exit signal occurs, all pyramiding positions exit together as a single unit
 
 **Example Scenario:**
 1. **BUY position is active** (CALL option bought)
 2. Price goes above outer upper KC band (KC1_upper) → **ARMED SELL is set** (even though BUY position exists)
 3. SELL entry conditions are met (HA close < KC2_upper, volume > MA) → **BUT NO TRADE** (silently blocked, no log)
-4. BUY position exits (Supertrend changes from GREEN to RED)
+4. BUY position exits (Supertrend changes from GREEN to RED) → **All pyramiding positions exit together**
 5. **Same candle**: Check if armed SELL → If HA close < KC2_upper AND volume > MA → **SELL trade is taken** (PUT option)
+
+### Pyramiding System
+
+The pyramiding system allows adding positions when price moves favorably by a specified distance.
+
+#### Pyramiding Rules
+
+1. **Initial Entry**: First position is taken at entry signal (BUY or SELL)
+   - `pyramiding_count` = 1
+   - `first_entry_price` = Entry price (HA close)
+   - `last_pyramiding_price` = Entry price
+
+2. **Pyramiding Conditions** (checked on every candle close):
+   - **BUY Pyramiding**: Price moves UP by `PyramidingDistance` × `pyramiding_count`
+     - Level 1: `first_entry_price + (1 × PyramidingDistance)`
+     - Level 2: `first_entry_price + (2 × PyramidingDistance)`
+     - Level 3: `first_entry_price + (3 × PyramidingDistance)`
+   - **SELL Pyramiding**: Price moves DOWN by `PyramidingDistance` × `pyramiding_count`
+     - Level 1: `first_entry_price - (1 × PyramidingDistance)`
+     - Level 2: `first_entry_price - (2 × PyramidingDistance)`
+     - Level 3: `first_entry_price - (3 × PyramidingDistance)`
+
+3. **Maximum Positions**: 
+   - Total positions = 1 (initial) + `PyramidingNumber` (pyramiding)
+   - Example: If `PyramidingNumber = 2`, maximum 3 total positions
+
+4. **Same Option Strike**: All pyramiding positions use the same option strike as the initial entry
+
+5. **Exit Together**: When exit signal occurs, all positions (initial + pyramiding) exit together
+
+#### Pyramiding Example
+
+**Configuration:**
+- `PyramidingDistance = 50`
+- `PyramidingNumber = 2`
+- `Lotsize = 1`
+
+**BUY Position Pyramiding:**
+1. **Initial Entry** at price 100:
+   - Position #1: BUY CALL option at 100
+   - `pyramiding_count = 1`
+   - `first_entry_price = 100`
+
+2. **Price moves to 150** (100 + 1×50):
+   - Pyramiding Level 1 triggered
+   - Position #2: BUY same CALL option at 150
+   - `pyramiding_count = 2`
+
+3. **Price moves to 200** (100 + 2×50):
+   - Pyramiding Level 2 triggered
+   - Position #3: BUY same CALL option at 200
+   - `pyramiding_count = 3` (maximum reached)
+
+4. **Exit Signal** (Supertrend GREEN → RED):
+   - All 3 positions exit together
+   - Total quantity: 3 lots
+   - `pyramiding_count` reset to 0
+
+**SELL Position Pyramiding:**
+1. **Initial Entry** at price 100:
+   - Position #1: BUY PUT option at 100
+   - `pyramiding_count = 1`
+   - `first_entry_price = 100`
+
+2. **Price moves to 50** (100 - 1×50):
+   - Pyramiding Level 1 triggered
+   - Position #2: BUY same PUT option at 50
+   - `pyramiding_count = 2`
+
+3. **Price moves to 0** (100 - 2×50):
+   - Pyramiding Level 2 triggered
+   - Position #3: BUY same PUT option at 0
+   - `pyramiding_count = 3` (maximum reached)
+
+4. **Exit Signal** (Supertrend RED → GREEN):
+   - All 3 positions exit together
+   - Total quantity: 3 lots
+   - `pyramiding_count` reset to 0
+
+#### Pyramiding State Tracking
+
+The bot tracks pyramiding state in `trading_states`:
+- `pyramiding_count`: Current number of positions (1, 2, 3...)
+- `first_entry_price`: Price of first entry (reference for all pyramiding levels)
+- `last_pyramiding_price`: Price of last pyramiding entry
+- `pyramiding_positions`: List of all pyramiding positions with order IDs and entry prices
 
 ### Option Selection Strategy
 
@@ -453,8 +542,8 @@ zerodha2fa,J25T6D7R7RQ2CIFJZ6IGTPPVR2SHO52W
 Configure your trading symbols and indicator parameters:
 
 ```csv
-Symbol,Expiery,Timeframe,StrikeStep,StrikeNumber,Lotsize,VolumeMa,SupertrendPeriod,SupertrendMul,KC1_Length,KC1_Mul,KC1_ATR,KC2_Length,KC2_Mul,KC2_ATR
-CRUDEOIL,19-11-2025,5minute,50,6,1,29,10,3.0,50,2.0,14,50,2.0,12
+Symbol,Expiery,Timeframe,StrikeStep,StrikeNumber,Lotsize,VolumeMa,SupertrendPeriod,SupertrendMul,KC1_Length,KC1_Mul,KC1_ATR,KC2_Length,KC2_Mul,KC2_ATR,PyramidingDistance,PyramidingNumber
+CRUDEOIL,25-12-2025,minute,50,6,1,29,10,3,50,3.75,12,50,2.75,14,50,2
 ```
 
 **Column Descriptions:**
@@ -463,7 +552,7 @@ CRUDEOIL,19-11-2025,5minute,50,6,1,29,10,3.0,50,2.0,14,50,2.0,12
 - `Timeframe`: Candle timeframe (e.g., 5minute, 15minute, 1hour)
 - `StrikeStep`: Strike step for options (e.g., 50) - used for strike normalization
 - `StrikeNumber`: Number of strikes on each side of ATM (e.g., 6) - used for strike list creation
-- `Lotsize`: Lot size for trading (future use)
+- `Lotsize`: Lot size for trading (quantity per position)
 - `VolumeMa`: Volume Moving Average period (default: 29)
 - `SupertrendPeriod`: Supertrend ATR period (default: 10)
 - `SupertrendMul`: Supertrend multiplier (default: 3.0)
@@ -473,6 +562,8 @@ CRUDEOIL,19-11-2025,5minute,50,6,1,29,10,3.0,50,2.0,14,50,2.0,12
 - `KC2_Length`: Keltner Channel 2 EMA length (default: 50)
 - `KC2_Mul`: Keltner Channel 2 multiplier (default: 2.0)
 - `KC2_ATR`: Keltner Channel 2 ATR period (default: 12)
+- `PyramidingDistance`: Price movement required to add pyramiding position (e.g., 50)
+- `PyramidingNumber`: Maximum number of additional pyramiding positions (e.g., 2 = max 3 total positions: 1 initial + 2 pyramiding)
 
 ## 🎯 Usage
 
@@ -627,6 +718,7 @@ Check Armed SELL → If entry conditions met → SELL Entry (same candle)
 ├── TradeSettings.csv           # ✅ Trading symbols and parameters (UPLOAD TO SERVER)
 ├── state.json                  # ⚠️ Trading state persistence (auto-generated - DON'T UPLOAD)
 ├── OrderLog.txt                # ⚠️ Trading event logs (auto-generated - DON'T UPLOAD)
+├── signal.csv                  # ⚠️ CSV trade signals log (auto-generated - DON'T UPLOAD)
 ├── data.csv                    # ⚠️ Processed historical data (auto-generated - DON'T UPLOAD)
 ├── access_token.txt            # ⚠️ Zerodha access token (auto-generated - DON'T UPLOAD)
 └── request_token.txt           # ⚠️ Zerodha request token (auto-generated - DON'T UPLOAD)
@@ -713,12 +805,18 @@ If "Too many requests" error occurs:
 
 ## 📝 Logging
 
+### OrderLog.txt
+
 All trading events are logged to `OrderLog.txt` with timestamps:
 
 - **ARMED BUY/SELL**: When armed conditions are met
 - **ARMED RESET**: When armed conditions are reset (opposite condition)
 - **BUY/SELL ENTRY**: When positions are entered (includes selected option details with delta)
-- **EXIT BUY/SELL**: When positions are exited
+- **PYRAMIDING TRADE OPENED**: When pyramiding position is added (includes position number, price movement, pyramiding level)
+- **PYRAMIDING ORDER FAILED**: When pyramiding order fails
+- **PYRAMIDING EXIT TRIGGERED**: When exit signal occurs (includes all positions being exited)
+- **PYRAMIDING RESET CONFIRMED**: When pyramiding state is reset after exit
+- **EXIT BUY/SELL**: When positions are exited (includes P&L for each position)
 - **DELTA CALCULATION**: Detailed table showing all strike deltas, IV (with source), and selected option
 - **BUY/SELL ENTRY BLOCKED**: When entry conditions are met but blocked due to existing position
 - **ERRORS**: Any errors or re-login events
@@ -738,9 +836,53 @@ When a signal is triggered, the bot prints a detailed table showing:
 - Position is set regardless of order success/failure
 - Broker response (success/failure) is always logged
 
+**Pyramiding Logging**:
+- Each pyramiding position addition is logged with:
+  - Position number (e.g., Position #2 of 3 max)
+  - Entry price and first entry price
+  - Price movement and percentage
+  - Pyramiding level and distance
+  - Order ID and quantity
+  - Total positions count
+- Exit logs show all positions being exited with individual P&L
+
 **Entry Blocked Behavior**:
 - When entry conditions are met but a position already exists, the bot **silently skips** (no log, no order)
-- This prevents conflicting trades and ensures one position at a time
+- This prevents conflicting trades and ensures one position type at a time
+
+### signal.csv
+
+All trade signals are logged to `signal.csv` in structured format for easy analysis:
+
+**CSV Columns:**
+- `timestamp`: Date and time of the trade signal
+- `Action`: Trade action type:
+  - `buy`: Initial BUY entry
+  - `sell`: Initial SELL entry
+  - `pyramiding trade buy`: Pyramiding BUY position addition
+  - `pyramiding trade sell`: Pyramiding SELL position addition
+  - `buyexit`: BUY position exit (all positions together)
+  - `sellexit`: SELL position exit (all positions together)
+- `OptionPrice`: Option price at entry/exit
+- `OptionContract`: Option symbol (e.g., CRUDEOIL25DEC5100CE)
+- `FutureContract`: Future symbol (e.g., CRUDEOIL25DECFUT)
+- `Future price`: Future price (HA close) at entry/exit
+- `Lotsize`: Quantity (for exits, this is total quantity of all positions)
+
+**CSV Logging Behavior**:
+- **Always logs**: CSV logging occurs regardless of order success/failure
+- **Missing data**: If option symbol or price is unavailable, logs "N/A" or 0
+- **Pyramiding entries**: Each pyramiding position is logged separately
+- **Exits**: Single log entry for all positions exiting together (total lotsize shown)
+
+**Example CSV Entries:**
+```csv
+timestamp,Action,OptionPrice,OptionContract,FutureContract,Future price,Lotsize
+2025-11-28 19:39:13,buy,266.00,CRUDEOIL25DEC5100CE,CRUDEOIL25DECFUT,5281.00,1
+2025-11-28 19:44:13,pyramiding trade buy,280.00,CRUDEOIL25DEC5100CE,CRUDEOIL25DECFUT,5331.00,1
+2025-11-28 19:49:13,pyramiding trade buy,295.00,CRUDEOIL25DEC5100CE,CRUDEOIL25DECFUT,5381.00,1
+2025-11-28 19:54:13,buyexit,310.00,CRUDEOIL25DEC5100CE,CRUDEOIL25DECFUT,5431.00,3
+```
 
 ## ⚠️ Important Notes
 
@@ -799,6 +941,230 @@ For issues or questions:
 2. Verify credentials in `ZerodhaCredentials.csv`
 3. Check trading settings in `TradeSettings.csv`
 4. Ensure internet connection is stable
+
+## 📚 Complete Trading Logic Explanation
+
+### 1. Entry Logic
+
+#### BUY Entry Flow:
+1. **Armed Condition**: HA candle low < KC1_lower (outer lower band)
+   - Sets `armed_buy = True`
+   - Can be set even if position exists
+   - Remains active until reset
+
+2. **Entry Condition**: Once armed, when:
+   - HA candle close > KC2_lower (inner lower band)
+   - AND volume > VolumeMA
+   - AND no existing position
+   - Evaluated on candle close
+
+3. **Option Selection**:
+   - Gets underlying LTP
+   - Normalizes to ATM strike
+   - Creates strike list around ATM
+   - Calculates IV for each strike (py_vollib → API → Default)
+   - Calculates delta for CALL options (strikes ≤ ATM)
+   - Selects strike with maximum delta (capped at 0.80)
+
+4. **Order Placement**:
+   - Places LIMIT order at current option LTP
+   - Sets `position = 'BUY'` regardless of order success/failure
+   - Initializes pyramiding fields:
+     - `pyramiding_count = 1`
+     - `first_entry_price = ha_close`
+     - `last_pyramiding_price = ha_close`
+     - `pyramiding_positions = []`
+
+5. **Logging**:
+   - Logs to `OrderLog.txt` with order status
+   - Logs to `signal.csv` with action='buy'
+
+#### SELL Entry Flow:
+1. **Armed Condition**: HA candle high ≥ KC1_upper (outer upper band)
+   - Sets `armed_sell = True`
+   - Can be set even if BUY position exists
+   - Remains active until reset
+
+2. **Entry Condition**: Once armed, when:
+   - HA candle close < KC2_upper (inner upper band)
+   - AND volume > VolumeMA
+   - AND previous HA candle is RED (prev_ha_close < prev_ha_open)
+   - AND no existing position
+   - Evaluated on candle close
+
+3. **Option Selection**:
+   - Gets underlying LTP
+   - Normalizes to ATM strike
+   - Creates strike list around ATM
+   - Calculates IV for each strike
+   - Calculates delta for PUT options (strikes ≥ ATM)
+   - Selects strike with maximum absolute delta (capped at -0.80)
+
+4. **Order Placement**:
+   - Places LIMIT order at current option LTP
+   - Sets `position = 'SELL'` regardless of order success/failure
+   - Initializes pyramiding fields (same as BUY)
+
+5. **Logging**:
+   - Logs to `OrderLog.txt` with order status
+   - Logs to `signal.csv` with action='sell'
+
+### 2. Exit Logic
+
+#### BUY Exit Flow:
+1. **Exit Condition**: Supertrend changes from GREEN (trend=1) to RED (trend=-1)
+   - Evaluated on candle close
+   - Checks previous candle's supertrend trend
+
+2. **Exit Execution**:
+   - Gets all pyramiding positions from `pyramiding_positions`
+   - Places SELL order for initial position
+   - Places SELL order for each pyramiding position
+   - Calculates P&L for each position
+   - Logs detailed exit information
+
+3. **State Reset**:
+   - `position = None`
+   - `pyramiding_count = 0`
+   - `first_entry_price = None`
+   - `last_pyramiding_price = None`
+   - `pyramiding_positions = []`
+   - Clears option symbol, exchange, order ID
+
+4. **CSV Logging**:
+   - Single log entry with total lotsize (all positions)
+   - Action: 'buyexit'
+
+5. **Re-entry Check**:
+   - Immediately checks armed status on same candle
+   - If armed SELL and entry conditions met → SELL entry
+
+#### SELL Exit Flow:
+1. **Exit Condition**: Supertrend changes from RED (trend=-1) to GREEN (trend=1)
+   - Evaluated on candle close
+   - Checks previous candle's supertrend trend
+
+2. **Exit Execution**: Same as BUY exit (but SELL positions)
+
+3. **State Reset**: Same as BUY exit
+
+4. **CSV Logging**: Action: 'sellexit'
+
+5. **Re-entry Check**: Same as BUY exit
+
+### 3. Pyramiding Logic
+
+#### Pyramiding Check (on every candle close):
+1. **Pre-conditions**:
+   - Position exists (BUY or SELL)
+   - `pyramiding_count > 0` (has initial entry)
+   - `PyramidingDistance > 0` and `PyramidingNumber > 0`
+   - `pyramiding_count < (PyramidingNumber + 1)` (not at max)
+
+2. **BUY Pyramiding**:
+   - Calculates next level: `first_entry_price + (pyramiding_count × PyramidingDistance)`
+   - If `ha_close >= next_level`:
+     - Places BUY order for same CALL option
+     - Increments `pyramiding_count`
+     - Updates `last_pyramiding_price = ha_close`
+     - Adds to `pyramiding_positions` list
+     - Logs to `OrderLog.txt` and `signal.csv` (action='pyramiding trade buy')
+
+3. **SELL Pyramiding**:
+   - Calculates next level: `first_entry_price - (pyramiding_count × PyramidingDistance)`
+   - If `ha_close <= next_level`:
+     - Places BUY order for same PUT option
+     - Increments `pyramiding_count`
+     - Updates `last_pyramiding_price = ha_close`
+     - Adds to `pyramiding_positions` list
+     - Logs to `OrderLog.txt` and `signal.csv` (action='pyramiding trade sell')
+
+4. **CSV Logging**:
+   - Always logs pyramiding attempts (even if order fails)
+   - Uses "N/A" or 0 if option data unavailable
+
+### 4. Armed State Management
+
+#### Armed BUY:
+- **Set**: HA low < KC1_lower
+- **Reset**: HA high > KC1_upper AND HA high > KC2_upper
+- **Persistence**: Remains active after entry (allows re-entry after exit)
+
+#### Armed SELL:
+- **Set**: HA high ≥ KC1_upper
+- **Reset**: HA low < KC1_lower AND HA low < KC2_lower
+- **Persistence**: Remains active after entry (allows re-entry after exit)
+
+### 5. Position Management
+
+#### Rules:
+- **One Position Type**: Only BUY or SELL can be active (not both)
+- **Multiple Positions**: Can have multiple positions of same type via pyramiding
+- **Entry Blocking**: Entry blocked if position exists (silently skipped)
+- **Exit Together**: All pyramiding positions exit together
+- **State Persistence**: Position state saved to `state.json` after each change
+
+### 6. Option Selection Logic
+
+#### Strike Normalization:
+1. Get underlying LTP
+2. Round to nearest strike based on `StrikeStep`
+   - Example: LTP=5319, StrikeStep=50 → ATM=5300
+
+#### Strike List Creation:
+- Creates list: `[ATM - (StrikeNumber×StrikeStep), ..., ATM, ..., ATM + (StrikeNumber×StrikeStep)]`
+- Example: ATM=5300, StrikeNumber=6, StrikeStep=50
+  - List: [5000, 5050, 5100, 5150, 5200, 5250, 5300, 5350, 5400, 5450, 5500, 5550, 5600]
+
+#### IV Calculation:
+1. **Primary**: Calculate from option LTP using py_vollib (Black-Scholes inverse)
+2. **Fallback 1**: Use API IV if available
+3. **Fallback 2**: Use default 20% if calculation fails
+4. Log IV source: "py_vollib", "API", or "Default"
+
+#### Delta Calculation:
+1. **For BUY (CALL)**: Calculate delta for strikes ≤ ATM
+2. **For SELL (PUT)**: Calculate delta for strikes ≥ ATM
+3. **Primary**: Use py_vollib
+4. **Fallback**: Manual Black-Scholes calculation
+5. **Risk-free rates**: 10% for MCX, 6% for NFO
+
+#### Option Selection:
+- Selects strike with **maximum delta**
+- **Caps**: CALL delta ≤ 0.80, PUT delta ≥ -0.80
+- Logs all strikes evaluated with delta, IV, LTP
+
+### 7. Order Management
+
+#### Order Types:
+- **LIMIT Orders**: Used for all entries (required for MCX commodities)
+- **Price**: Current option LTP (Last Traded Price)
+- **Product**: NRML (Positional)
+
+#### Order Status Handling:
+- **Success**: Logs Order ID, updates state
+- **Failure**: Logs rejection reason, still sets position
+- **Position State**: Always set regardless of order success/failure
+- **CSV Logging**: Always logs regardless of order success/failure
+
+### 8. State Persistence
+
+#### Saved to `state.json`:
+- Position (BUY/SELL/None)
+- Armed states (armed_buy, armed_sell)
+- Option symbol, exchange, order ID
+- Pyramiding fields:
+  - pyramiding_count
+  - first_entry_price
+  - last_pyramiding_price
+  - pyramiding_positions (list of all positions)
+
+#### Saved After:
+- Each strategy execution
+- Position entry
+- Position exit
+- Pyramiding addition
+- Program termination
 
 ## 📄 License
 

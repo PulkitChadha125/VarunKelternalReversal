@@ -61,7 +61,7 @@ echo Starting Trading Bot...
 echo ========================================
 echo.
 
-python main.py
+python MainPyramidingSl.py
 
 REM If main.py exits, pause so user can see any error messages
 if errorlevel 1 (

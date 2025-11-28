@@ -1,0 +1,32 @@
+[2025-11-28 19:33:01] ARMED BUY | Symbol: CRUDEOIL25DECFUT | HA_Low: 5267.00 < KC1_Lower (Outer): 5268.16 | HA_Close: 5269.50 | Volume: 68
+[2025-11-28 19:39:12] DELTA CALCULATION | Option Type: CE | Underlying: CRUDEOIL | LTP: 5282.00 | ATM Strike: 5300 | Time to Expiry: 0.0717 years | Risk-free Rate: 10.00%
+[2025-11-28 19:39:12] STRIKES EVALUATED: 7 strikes | Strike List: [5000, 5050, 5100, 5150, 5200, 5250, 5300]
+[2025-11-28 19:39:12]   Strike: 5000 | Symbol: CRUDEOIL25DEC5000CE | Delta: 0.870464 (py_vollib) | IV: 21.06% (py_vollib) | LTP: 337.50 | 
+[2025-11-28 19:39:12]   Strike: 5050 | Symbol: CRUDEOIL25DEC5050CE | Delta: 0.818723 (py_vollib) | IV: 22.08% (py_vollib) | LTP: 299.70 | 
+[2025-11-28 19:39:12]   Strike: 5100 | Symbol: CRUDEOIL25DEC5100CE | Delta: 0.761236 (py_vollib) | IV: 23.22% (py_vollib) | LTP: 266.00 | ✓ SELECTED
+[2025-11-28 19:39:12]   Strike: 5150 | Symbol: CRUDEOIL25DEC5150CE | Delta: 0.703668 (py_vollib) | IV: 24.13% (py_vollib) | LTP: 234.90 | 
+[2025-11-28 19:39:12]   Strike: 5200 | Symbol: CRUDEOIL25DEC5200CE | Delta: 0.648422 (py_vollib) | IV: 24.46% (py_vollib) | LTP: 204.20 | 
+[2025-11-28 19:39:12]   Strike: 5250 | Symbol: CRUDEOIL25DEC5250CE | Delta: 0.592170 (py_vollib) | IV: 24.73% (py_vollib) | LTP: 176.10 | 
+[2025-11-28 19:39:12]   Strike: 5300 | Symbol: CRUDEOIL25DEC5300CE | Delta: 0.535877 (py_vollib) | IV: 24.66% (py_vollib) | LTP: 149.00 | 
+[2025-11-28 19:39:13] ORDER FAILED: BUY CRUDEOIL25DEC5100CE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 266.00 | Error: API Error: Insufficient funds. Required margin is 26600.00 but available margin is 0.00.
+[2025-11-28 19:39:13] BUY ENTRY | Symbol: CRUDEOIL25DECFUT | Price: 5281.00 | Volume: 35 > VolumeMA: 26 | HA_Close: 5281.00 > KC1_Lower: 5264.92 AND KC2_Lower: 5269.74 | HA_High: 5283.00 | HA_Low: 5276.89 | KC1_Upper: 5297.49 | KC1_Lower: 5264.92 | KC2_Upper: 5292.66 | KC2_Lower: 5269.74 | Supertrend: -1.0 | Supertrend_Value: 5281.71 | Selected Option: CRUDEOIL25DEC5100CE | Strike: 5100 | Delta: 0.7612 | IV: 0.2322 | LTP: 266.00 | Order Status: REJECTED | Rejection Reason: Order placement failed - check previous ORDER FAILED log for details
+[2025-11-28 20:13:01] ARMED SELL | Symbol: CRUDEOIL25DECFUT | HA_High: 5302.00 >= KC1_Upper (Outer): 5301.24 | HA_Close: 5300.00 | Volume: 67 | Note: BUY position active, SELL entry will wait for BUY exit
+[2025-11-28 20:13:01] ARMED BUY RESET | Symbol: CRUDEOIL25DECFUT | HA_High: 5302.00 > KC1_Upper: 5301.24 AND KC2_Upper: 5297.16
+[2025-11-28 20:54:01] ================================================================================
+[2025-11-28 20:54:01] PYRAMIDING EXIT TRIGGERED | BUY Position | Symbol: CRUDEOIL25DECFUT (CRUDEOIL)
+[2025-11-28 20:54:01] Exit Reason: Supertrend flipped from GREEN (1) to RED (-1)
+[2025-11-28 20:54:01] Total Positions to Exit: 1
+[2025-11-28 20:54:01] --------------------------------------------------------------------------------
+[2025-11-28 20:54:01] --------------------------------------------------------------------------------
+[2025-11-28 20:54:01] PYRAMIDING RESET CONFIRMED:
+[2025-11-28 20:54:01]   pyramiding_count: 1 -> 0
+[2025-11-28 20:54:01] ERROR: Error in execute_trading_strategy for CRUDEOIL: Invalid format specifier '.2f if first_entry_price else 'N/A'' for object of type 'float'
+[2025-11-28 22:35:01] ================================================================================
+[2025-11-28 22:35:01] PYRAMIDING EXIT TRIGGERED | BUY Position | Symbol: CRUDEOIL25DECFUT (CRUDEOIL)
+[2025-11-28 22:35:01] Exit Reason: Supertrend flipped from GREEN (1) to RED (-1)
+[2025-11-28 22:35:01] Total Positions to Exit: 1
+[2025-11-28 22:35:01] --------------------------------------------------------------------------------
+[2025-11-28 22:35:01] --------------------------------------------------------------------------------
+[2025-11-28 22:35:01] PYRAMIDING RESET CONFIRMED:
+[2025-11-28 22:35:01]   pyramiding_count: 1 -> 0
+[2025-11-28 22:35:01] ERROR: Error in execute_trading_strategy for CRUDEOIL: Invalid format specifier '.2f if first_entry_price else 'N/A'' for object of type 'float'

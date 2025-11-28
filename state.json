@@ -1,5 +1,5 @@
 {
-  "last_updated": "2025-11-20T14:21:01.479597",
+  "last_updated": "2025-11-28T16:07:01.673165",
   "trading_states": {
     "CRUDEOIL_25-12-2025": {
       "position": "BUY",
@@ -9,7 +9,11 @@
       "last_exit_candle_date": null,
       "option_symbol": null,
       "option_exchange": null,
-      "option_order_id": null
+      "option_order_id": null,
+      "pyramiding_count": 0,
+      "first_entry_price": null,
+      "last_pyramiding_price": null,
+      "pyramiding_positions": []
     }
   }
 }
