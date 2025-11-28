@@ -2098,9 +2098,11 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         
                         # Always set position when entry conditions are met (regardless of order success)
                         trading_state['position'] = 'BUY'
-                        if order_response:
+                        # Store option symbol and exchange even if order fails (needed for exit orders)
+                        if selected_option:
                             trading_state['option_symbol'] = selected_option['option_symbol']
                             trading_state['option_exchange'] = option_exchange
+                        if order_response:
                             trading_state['option_order_id'] = order_response.get('order_id', None)
                         
                         # Initialize pyramiding fields for first entry
@@ -2315,9 +2317,11 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         
                         # Always set position when entry conditions are met (regardless of order success)
                         trading_state['position'] = 'SELL'
-                        if order_response:
+                        # Store option symbol and exchange even if order fails (needed for exit orders)
+                        if selected_option:
                             trading_state['option_symbol'] = selected_option['option_symbol']
                             trading_state['option_exchange'] = option_exchange
+                        if order_response:
                             trading_state['option_order_id'] = order_response.get('order_id', None)
                         
                         # Initialize pyramiding fields for first entry
