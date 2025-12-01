@@ -1,32 +1,255 @@
-[2025-11-28 19:33:01] ARMED BUY | Symbol: CRUDEOIL25DECFUT | HA_Low: 5267.00 < KC1_Lower (Outer): 5268.16 | HA_Close: 5269.50 | Volume: 68
-[2025-11-28 19:39:12] DELTA CALCULATION | Option Type: CE | Underlying: CRUDEOIL | LTP: 5282.00 | ATM Strike: 5300 | Time to Expiry: 0.0717 years | Risk-free Rate: 10.00%
-[2025-11-28 19:39:12] STRIKES EVALUATED: 7 strikes | Strike List: [5000, 5050, 5100, 5150, 5200, 5250, 5300]
-[2025-11-28 19:39:12]   Strike: 5000 | Symbol: CRUDEOIL25DEC5000CE | Delta: 0.870464 (py_vollib) | IV: 21.06% (py_vollib) | LTP: 337.50 | 
-[2025-11-28 19:39:12]   Strike: 5050 | Symbol: CRUDEOIL25DEC5050CE | Delta: 0.818723 (py_vollib) | IV: 22.08% (py_vollib) | LTP: 299.70 | 
-[2025-11-28 19:39:12]   Strike: 5100 | Symbol: CRUDEOIL25DEC5100CE | Delta: 0.761236 (py_vollib) | IV: 23.22% (py_vollib) | LTP: 266.00 | ✓ SELECTED
-[2025-11-28 19:39:12]   Strike: 5150 | Symbol: CRUDEOIL25DEC5150CE | Delta: 0.703668 (py_vollib) | IV: 24.13% (py_vollib) | LTP: 234.90 | 
-[2025-11-28 19:39:12]   Strike: 5200 | Symbol: CRUDEOIL25DEC5200CE | Delta: 0.648422 (py_vollib) | IV: 24.46% (py_vollib) | LTP: 204.20 | 
-[2025-11-28 19:39:12]   Strike: 5250 | Symbol: CRUDEOIL25DEC5250CE | Delta: 0.592170 (py_vollib) | IV: 24.73% (py_vollib) | LTP: 176.10 | 
-[2025-11-28 19:39:12]   Strike: 5300 | Symbol: CRUDEOIL25DEC5300CE | Delta: 0.535877 (py_vollib) | IV: 24.66% (py_vollib) | LTP: 149.00 | 
-[2025-11-28 19:39:13] ORDER FAILED: BUY CRUDEOIL25DEC5100CE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 266.00 | Error: API Error: Insufficient funds. Required margin is 26600.00 but available margin is 0.00.
-[2025-11-28 19:39:13] BUY ENTRY | Symbol: CRUDEOIL25DECFUT | Price: 5281.00 | Volume: 35 > VolumeMA: 26 | HA_Close: 5281.00 > KC1_Lower: 5264.92 AND KC2_Lower: 5269.74 | HA_High: 5283.00 | HA_Low: 5276.89 | KC1_Upper: 5297.49 | KC1_Lower: 5264.92 | KC2_Upper: 5292.66 | KC2_Lower: 5269.74 | Supertrend: -1.0 | Supertrend_Value: 5281.71 | Selected Option: CRUDEOIL25DEC5100CE | Strike: 5100 | Delta: 0.7612 | IV: 0.2322 | LTP: 266.00 | Order Status: REJECTED | Rejection Reason: Order placement failed - check previous ORDER FAILED log for details
-[2025-11-28 20:13:01] ARMED SELL | Symbol: CRUDEOIL25DECFUT | HA_High: 5302.00 >= KC1_Upper (Outer): 5301.24 | HA_Close: 5300.00 | Volume: 67 | Note: BUY position active, SELL entry will wait for BUY exit
-[2025-11-28 20:13:01] ARMED BUY RESET | Symbol: CRUDEOIL25DECFUT | HA_High: 5302.00 > KC1_Upper: 5301.24 AND KC2_Upper: 5297.16
-[2025-11-28 20:54:01] ================================================================================
-[2025-11-28 20:54:01] PYRAMIDING EXIT TRIGGERED | BUY Position | Symbol: CRUDEOIL25DECFUT (CRUDEOIL)
-[2025-11-28 20:54:01] Exit Reason: Supertrend flipped from GREEN (1) to RED (-1)
-[2025-11-28 20:54:01] Total Positions to Exit: 1
-[2025-11-28 20:54:01] --------------------------------------------------------------------------------
-[2025-11-28 20:54:01] --------------------------------------------------------------------------------
-[2025-11-28 20:54:01] PYRAMIDING RESET CONFIRMED:
-[2025-11-28 20:54:01]   pyramiding_count: 1 -> 0
-[2025-11-28 20:54:01] ERROR: Error in execute_trading_strategy for CRUDEOIL: Invalid format specifier '.2f if first_entry_price else 'N/A'' for object of type 'float'
-[2025-11-28 22:35:01] ================================================================================
-[2025-11-28 22:35:01] PYRAMIDING EXIT TRIGGERED | BUY Position | Symbol: CRUDEOIL25DECFUT (CRUDEOIL)
-[2025-11-28 22:35:01] Exit Reason: Supertrend flipped from GREEN (1) to RED (-1)
-[2025-11-28 22:35:01] Total Positions to Exit: 1
-[2025-11-28 22:35:01] --------------------------------------------------------------------------------
-[2025-11-28 22:35:01] --------------------------------------------------------------------------------
-[2025-11-28 22:35:01] PYRAMIDING RESET CONFIRMED:
-[2025-11-28 22:35:01]   pyramiding_count: 1 -> 0
-[2025-11-28 22:35:01] ERROR: Error in execute_trading_strategy for CRUDEOIL: Invalid format specifier '.2f if first_entry_price else 'N/A'' for object of type 'float'
+[2025-12-01 09:00:36] Auto-login performed at 9:00 AM
+[2025-12-01 10:04:01] ARMED SELL | Symbol: CRUDEOIL25DECFUT | HA_High: 5347.00 >= KC1_Upper (Outer): 5345.99 | HA_Close: 5343.75 | Volume: 92
+[2025-12-01 10:32:11] DELTA CALCULATION | Option Type: PE | Underlying: CRUDEOIL | LTP: 5343.00 | ATM Strike: 5350 | Time to Expiry: 0.0645 years | Risk-free Rate: 10.00%
+[2025-12-01 10:32:11] STRIKES EVALUATED: 7 strikes | Strike List: [5350, 5400, 5450, 5500, 5550, 5600, 5650]
+[2025-12-01 10:32:11]   Strike: 5350 | Symbol: CRUDEOIL25DEC5350PE | Delta: -0.458883 (py_vollib) | IV: 33.00% (py_vollib) | LTP: 164.80 | 
+[2025-12-01 10:32:11]   Strike: 5400 | Symbol: CRUDEOIL25DEC5400PE | Delta: -0.502910 (py_vollib) | IV: 33.16% (py_vollib) | LTP: 191.20 | 
+[2025-12-01 10:32:11]   Strike: 5450 | Symbol: CRUDEOIL25DEC5450PE | Delta: -0.544504 (py_vollib) | IV: 33.99% (py_vollib) | LTP: 223.40 | 
+[2025-12-01 10:32:11]   Strike: 5500 | Symbol: CRUDEOIL25DEC5500PE | Delta: -0.585568 (py_vollib) | IV: 34.15% (py_vollib) | LTP: 254.00 | 
+[2025-12-01 10:32:11]   Strike: 5550 | Symbol: CRUDEOIL25DEC5550PE | Delta: -0.623475 (py_vollib) | IV: 34.65% (py_vollib) | LTP: 288.30 | 
+[2025-12-01 10:32:11]   Strike: 5600 | Symbol: CRUDEOIL25DEC5600PE | Delta: -0.654573 (py_vollib) | IV: 35.99% (py_vollib) | LTP: 328.50 | 
+[2025-12-01 10:32:11]   Strike: 5650 | Symbol: CRUDEOIL25DEC5650PE | Delta: -0.677633 (py_vollib) | IV: 38.18% (py_vollib) | LTP: 374.10 | ✓ SELECTED
+[2025-12-01 10:32:12] ORDER FAILED: BUY CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 37410.00 but available margin is 0.00.
+[2025-12-01 10:32:12] SELL ENTRY | Symbol: CRUDEOIL25DECFUT | Price: 5342.50 | Volume: 32 > VolumeMA: 11 | HA_Close: 5342.50 < KC1_Upper: 5346.87 AND KC2_Upper: 5345.59 | HA_High: 5343.15 | HA_Low: 5342.00 | KC1_Upper: 5346.87 | KC1_Lower: 5336.14 | KC2_Upper: 5345.59 | KC2_Lower: 5337.42 | Supertrend: 1.0 | Supertrend_Value: 5339.18 | Selected Option: CRUDEOIL25DEC5650PE | Strike: 5650 | Delta: -0.6776 | IV: 0.3818 | LTP: 374.10 | Order Status: REJECTED | Rejection Reason: Order placement failed - check previous ORDER FAILED log for details
+[2025-12-01 12:51:02] ORDER FAILED: SELL CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 217010.88 but available margin is 0.00.
+[2025-12-01 12:51:02] ================================================================================
+[2025-12-01 12:51:02] PYRAMIDING EXIT TRIGGERED | SELL Position | Symbol: CRUDEOIL25DECFUT (CRUDEOIL)
+[2025-12-01 12:51:02] Exit Reason: Supertrend flipped from RED (-1) to GREEN (1)
+[2025-12-01 12:51:02] Total Positions to Exit: 1
+[2025-12-01 12:51:02] --------------------------------------------------------------------------------
+[2025-12-01 12:51:02] Position #1 (Initial):
+[2025-12-01 12:51:02]   Option: CRUDEOIL25DEC5650PE
+[2025-12-01 12:51:02]   Entry Price: 5342.50
+[2025-12-01 12:51:02]   Exit Price: 374.10
+[2025-12-01 12:51:02]   Quantity: 1
+[2025-12-01 12:51:02]   P&L per unit: -4968.40
+[2025-12-01 12:51:02]   Order ID: N/A
+[2025-12-01 12:51:02] --------------------------------------------------------------------------------
+[2025-12-01 12:51:02] PYRAMIDING RESET CONFIRMED:
+[2025-12-01 12:51:02]   pyramiding_count: 1 -> 0
+[2025-12-01 12:51:02]   first_entry_price: 5342.50 -> None
+[2025-12-01 12:51:02]   last_pyramiding_price: 5342.50 -> None
+[2025-12-01 12:51:02]   pyramiding_positions: 0 positions -> []
+[2025-12-01 12:51:02]   position: SELL -> None
+[2025-12-01 12:51:02] ================================================================================
+[2025-12-01 12:56:03] DELTA CALCULATION | Option Type: PE | Underlying: CRUDEOIL | LTP: 5370.00 | ATM Strike: 5350 | Time to Expiry: 0.0642 years | Risk-free Rate: 10.00%
+[2025-12-01 12:56:03] STRIKES EVALUATED: 7 strikes | Strike List: [5350, 5400, 5450, 5500, 5550, 5600, 5650]
+[2025-12-01 12:56:03]   Strike: 5350 | Symbol: CRUDEOIL25DEC5350PE | Delta: -0.434970 (py_vollib) | IV: 32.79% (py_vollib) | LTP: 151.30 | 
+[2025-12-01 12:56:03]   Strike: 5400 | Symbol: CRUDEOIL25DEC5400PE | Delta: -0.479245 (py_vollib) | IV: 33.04% (py_vollib) | LTP: 177.00 | 
+[2025-12-01 12:56:03]   Strike: 5450 | Symbol: CRUDEOIL25DEC5450PE | Delta: -0.522150 (py_vollib) | IV: 33.62% (py_vollib) | LTP: 206.70 | 
+[2025-12-01 12:56:03]   Strike: 5500 | Symbol: CRUDEOIL25DEC5500PE | Delta: -0.563488 (py_vollib) | IV: 34.02% (py_vollib) | LTP: 237.50 | 
+[2025-12-01 12:56:03]   Strike: 5550 | Symbol: CRUDEOIL25DEC5550PE | Delta: -0.600759 (py_vollib) | IV: 34.96% (py_vollib) | LTP: 273.10 | 
+[2025-12-01 12:56:03]   Strike: 5600 | Symbol: CRUDEOIL25DEC5600PE | Delta: -0.636388 (py_vollib) | IV: 35.58% (py_vollib) | LTP: 308.70 | 
+[2025-12-01 12:56:03]   Strike: 5650 | Symbol: CRUDEOIL25DEC5650PE | Delta: -0.642781 (py_vollib) | IV: 41.82% (py_vollib) | LTP: 374.10 | ✓ SELECTED
+[2025-12-01 12:56:04] ORDER FAILED: BUY CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 37410.00 but available margin is 0.00.
+[2025-12-01 12:56:04] SELL ENTRY | Symbol: CRUDEOIL25DECFUT | Price: 5368.00 | Volume: 14 > VolumeMA: 7 | HA_Close: 5368.00 < KC1_Upper: 5375.50 AND KC2_Upper: 5372.96 | HA_High: 5370.00 | HA_Low: 5366.00 | KC1_Upper: 5375.50 | KC1_Lower: 5355.85 | KC2_Upper: 5372.96 | KC2_Lower: 5358.39 | Supertrend: 1.0 | Supertrend_Value: 5361.94 | Selected Option: CRUDEOIL25DEC5650PE | Strike: 5650 | Delta: -0.6428 | IV: 0.4182 | LTP: 374.10 | Order Status: REJECTED | Rejection Reason: Order placement failed - check previous ORDER FAILED log for details
+[2025-12-01 14:02:02] ORDER FAILED: SELL CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 217008.38 but available margin is 0.00.
+[2025-12-01 14:02:02] ================================================================================
+[2025-12-01 14:02:02] PYRAMIDING EXIT TRIGGERED | SELL Position | Symbol: CRUDEOIL25DECFUT (CRUDEOIL)
+[2025-12-01 14:02:02] Exit Reason: Supertrend flipped from RED (-1) to GREEN (1)
+[2025-12-01 14:02:02] Total Positions to Exit: 1
+[2025-12-01 14:02:02] --------------------------------------------------------------------------------
+[2025-12-01 14:02:02] Position #1 (Initial):
+[2025-12-01 14:02:02]   Option: CRUDEOIL25DEC5650PE
+[2025-12-01 14:02:02]   Entry Price: 5368.00
+[2025-12-01 14:02:02]   Exit Price: 374.10
+[2025-12-01 14:02:02]   Quantity: 1
+[2025-12-01 14:02:02]   P&L per unit: -4993.90
+[2025-12-01 14:02:02]   Order ID: N/A
+[2025-12-01 14:02:02] --------------------------------------------------------------------------------
+[2025-12-01 14:02:02] PYRAMIDING RESET CONFIRMED:
+[2025-12-01 14:02:02]   pyramiding_count: 1 -> 0
+[2025-12-01 14:02:02]   first_entry_price: 5368.00 -> None
+[2025-12-01 14:02:02]   last_pyramiding_price: 5368.00 -> None
+[2025-12-01 14:02:02]   pyramiding_positions: 0 positions -> []
+[2025-12-01 14:02:02]   position: SELL -> None
+[2025-12-01 14:02:02] ================================================================================
+[2025-12-01 14:05:02] DELTA CALCULATION | Option Type: PE | Underlying: CRUDEOIL | LTP: 5370.00 | ATM Strike: 5350 | Time to Expiry: 0.0641 years | Risk-free Rate: 10.00%
+[2025-12-01 14:05:02] STRIKES EVALUATED: 7 strikes | Strike List: [5350, 5400, 5450, 5500, 5550, 5600, 5650]
+[2025-12-01 14:05:02]   Strike: 5350 | Symbol: CRUDEOIL25DEC5350PE | Delta: -0.434771 (py_vollib) | IV: 32.56% (py_vollib) | LTP: 149.90 | 
+[2025-12-01 14:05:02]   Strike: 5400 | Symbol: CRUDEOIL25DEC5400PE | Delta: -0.479437 (py_vollib) | IV: 32.74% (py_vollib) | LTP: 175.20 | 
+[2025-12-01 14:05:02]   Strike: 5450 | Symbol: CRUDEOIL25DEC5450PE | Delta: -0.522409 (py_vollib) | IV: 33.54% (py_vollib) | LTP: 206.10 | 
+[2025-12-01 14:05:02]   Strike: 5500 | Symbol: CRUDEOIL25DEC5500PE | Delta: -0.565133 (py_vollib) | IV: 33.51% (py_vollib) | LTP: 234.60 | 
+[2025-12-01 14:05:02]   Strike: 5550 | Symbol: CRUDEOIL25DEC5550PE | Delta: -0.603500 (py_vollib) | IV: 34.30% (py_vollib) | LTP: 269.50 | 
+[2025-12-01 14:05:02]   Strike: 5600 | Symbol: CRUDEOIL25DEC5600PE | Delta: -0.639063 (py_vollib) | IV: 35.05% (py_vollib) | LTP: 305.90 | 
+[2025-12-01 14:05:02]   Strike: 5650 | Symbol: CRUDEOIL25DEC5650PE | Delta: -0.642869 (py_vollib) | IV: 41.86% (py_vollib) | LTP: 374.10 | ✓ SELECTED
+[2025-12-01 14:05:03] ORDER FAILED: BUY CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 37410.00 but available margin is 0.00.
+[2025-12-01 14:05:03] SELL ENTRY | Symbol: CRUDEOIL25DECFUT | Price: 5368.25 | Volume: 30 > VolumeMA: 15 | HA_Close: 5368.25 < KC1_Upper: 5380.37 AND KC2_Upper: 5375.58 | HA_High: 5373.00 | HA_Low: 5365.00 | KC1_Upper: 5380.37 | KC1_Lower: 5346.30 | KC2_Upper: 5375.58 | KC2_Lower: 5351.09 | Supertrend: 1.0 | Supertrend_Value: 5355.09 | Selected Option: CRUDEOIL25DEC5650PE | Strike: 5650 | Delta: -0.6429 | IV: 0.4186 | LTP: 374.10 | Order Status: REJECTED | Rejection Reason: Order placement failed - check previous ORDER FAILED log for details
+[2025-12-01 15:25:02] ORDER FAILED: SELL CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 217009.63 but available margin is 0.00.
+[2025-12-01 15:25:02] ================================================================================
+[2025-12-01 15:25:02] PYRAMIDING EXIT TRIGGERED | SELL Position | Symbol: CRUDEOIL25DECFUT (CRUDEOIL)
+[2025-12-01 15:25:02] Exit Reason: Supertrend flipped from RED (-1) to GREEN (1)
+[2025-12-01 15:25:02] Total Positions to Exit: 1
+[2025-12-01 15:25:02] --------------------------------------------------------------------------------
+[2025-12-01 15:25:02] Position #1 (Initial):
+[2025-12-01 15:25:02]   Option: CRUDEOIL25DEC5650PE
+[2025-12-01 15:25:02]   Entry Price: 5368.25
+[2025-12-01 15:25:02]   Exit Price: 374.10
+[2025-12-01 15:25:02]   Quantity: 1
+[2025-12-01 15:25:02]   P&L per unit: -4994.15
+[2025-12-01 15:25:02]   Order ID: N/A
+[2025-12-01 15:25:02] --------------------------------------------------------------------------------
+[2025-12-01 15:25:02] PYRAMIDING RESET CONFIRMED:
+[2025-12-01 15:25:02]   pyramiding_count: 1 -> 0
+[2025-12-01 15:25:02]   first_entry_price: 5368.25 -> None
+[2025-12-01 15:25:02]   last_pyramiding_price: 5368.25 -> None
+[2025-12-01 15:25:02]   pyramiding_positions: 0 positions -> []
+[2025-12-01 15:25:02]   position: SELL -> None
+[2025-12-01 15:25:02] ================================================================================
+[2025-12-01 15:30:02] DELTA CALCULATION | Option Type: PE | Underlying: CRUDEOIL | LTP: 5361.00 | ATM Strike: 5350 | Time to Expiry: 0.0639 years | Risk-free Rate: 10.00%
+[2025-12-01 15:30:02] STRIKES EVALUATED: 7 strikes | Strike List: [5350, 5400, 5450, 5500, 5550, 5600, 5650]
+[2025-12-01 15:30:02]   Strike: 5350 | Symbol: CRUDEOIL25DEC5350PE | Delta: -0.442830 (py_vollib) | IV: 32.55% (py_vollib) | LTP: 153.60 | 
+[2025-12-01 15:30:02]   Strike: 5400 | Symbol: CRUDEOIL25DEC5400PE | Delta: -0.487464 (py_vollib) | IV: 32.96% (py_vollib) | LTP: 180.60 | 
+[2025-12-01 15:30:02]   Strike: 5450 | Symbol: CRUDEOIL25DEC5450PE | Delta: -0.529991 (py_vollib) | IV: 33.77% (py_vollib) | LTP: 211.90 | 
+[2025-12-01 15:30:02]   Strike: 5500 | Symbol: CRUDEOIL25DEC5500PE | Delta: -0.571909 (py_vollib) | IV: 33.89% (py_vollib) | LTP: 241.60 | 
+[2025-12-01 15:30:02]   Strike: 5550 | Symbol: CRUDEOIL25DEC5550PE | Delta: -0.612776 (py_vollib) | IV: 33.92% (py_vollib) | LTP: 272.80 | 
+[2025-12-01 15:30:02]   Strike: 5600 | Symbol: CRUDEOIL25DEC5600PE | Delta: -0.650924 (py_vollib) | IV: 34.15% (py_vollib) | LTP: 307.00 | 
+[2025-12-01 15:30:02]   Strike: 5650 | Symbol: CRUDEOIL25DEC5650PE | Delta: -0.653990 (py_vollib) | IV: 40.74% (py_vollib) | LTP: 374.10 | ✓ SELECTED
+[2025-12-01 15:30:03] ORDER FAILED: BUY CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 37410.00 but available margin is 0.00.
+[2025-12-01 15:30:03] SELL ENTRY | Symbol: CRUDEOIL25DECFUT | Price: 5365.00 | Volume: 93 > VolumeMA: 15 | HA_Close: 5365.00 < KC1_Upper: 5376.99 AND KC2_Upper: 5373.20 | HA_High: 5369.00 | HA_Low: 5362.00 | KC1_Upper: 5376.99 | KC1_Lower: 5349.15 | KC2_Upper: 5373.20 | KC2_Lower: 5352.95 | Supertrend: 1.0 | Supertrend_Value: 5358.97 | Selected Option: CRUDEOIL25DEC5650PE | Strike: 5650 | Delta: -0.6540 | IV: 0.4074 | LTP: 374.10 | Order Status: REJECTED | Rejection Reason: Order placement failed - check previous ORDER FAILED log for details
+[2025-12-01 16:00:01] ARMED BUY | Symbol: CRUDEOIL25DECFUT | HA_Low: 5345.00 < KC1_Lower (Outer): 5345.14 | HA_Close: 5347.50 | Volume: 28
+[2025-12-01 16:00:01] ARMED SELL RESET | Symbol: CRUDEOIL25DECFUT | HA_Low: 5345.00 < KC1_Lower: 5345.14 AND KC2_Lower: 5348.27
+[2025-12-01 16:45:02] ORDER FAILED: BUY CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 37410.00 but available margin is 0.00.
+[2025-12-01 16:45:02] PYRAMIDING ORDER FAILED | SELL Position #2 | Symbol: CRUDEOIL25DECFUT | Option: CRUDEOIL25DEC5650PE | Price: 5309.25 | Pyramiding Level: 5315.00
+[2025-12-01 16:46:02] ORDER FAILED: BUY CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 37410.00 but available margin is 0.00.
+[2025-12-01 16:46:02] PYRAMIDING ORDER FAILED | SELL Position #2 | Symbol: CRUDEOIL25DECFUT | Option: CRUDEOIL25DEC5650PE | Price: 5306.50 | Pyramiding Level: 5315.00
+[2025-12-01 16:47:02] ORDER FAILED: BUY CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 37410.00 but available margin is 0.00.
+[2025-12-01 16:47:02] PYRAMIDING ORDER FAILED | SELL Position #2 | Symbol: CRUDEOIL25DECFUT | Option: CRUDEOIL25DEC5650PE | Price: 5311.00 | Pyramiding Level: 5315.00
+[2025-12-01 16:48:02] ORDER FAILED: BUY CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 37410.00 but available margin is 0.00.
+[2025-12-01 16:48:02] PYRAMIDING ORDER FAILED | SELL Position #2 | Symbol: CRUDEOIL25DECFUT | Option: CRUDEOIL25DEC5650PE | Price: 5313.50 | Pyramiding Level: 5315.00
+[2025-12-01 16:49:02] ORDER FAILED: BUY CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 37410.00 but available margin is 0.00.
+[2025-12-01 16:49:02] PYRAMIDING ORDER FAILED | SELL Position #2 | Symbol: CRUDEOIL25DECFUT | Option: CRUDEOIL25DEC5650PE | Price: 5313.00 | Pyramiding Level: 5315.00
+[2025-12-01 16:50:02] ORDER FAILED: BUY CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 37410.00 but available margin is 0.00.
+[2025-12-01 16:50:02] PYRAMIDING ORDER FAILED | SELL Position #2 | Symbol: CRUDEOIL25DECFUT | Option: CRUDEOIL25DEC5650PE | Price: 5315.00 | Pyramiding Level: 5315.00
+[2025-12-01 16:53:02] ORDER FAILED: BUY CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 37410.00 but available margin is 0.00.
+[2025-12-01 16:53:02] PYRAMIDING ORDER FAILED | SELL Position #2 | Symbol: CRUDEOIL25DECFUT | Option: CRUDEOIL25DEC5650PE | Price: 5314.00 | Pyramiding Level: 5315.00
+[2025-12-01 17:02:02] ORDER FAILED: SELL CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 216955.88 but available margin is 0.00.
+[2025-12-01 17:02:02] ================================================================================
+[2025-12-01 17:02:02] PYRAMIDING EXIT TRIGGERED | SELL Position | Symbol: CRUDEOIL25DECFUT (CRUDEOIL)
+[2025-12-01 17:02:02] Exit Reason: Supertrend flipped from RED (-1) to GREEN (1)
+[2025-12-01 17:02:02] Total Positions to Exit: 1
+[2025-12-01 17:02:02] --------------------------------------------------------------------------------
+[2025-12-01 17:02:02] Position #1 (Initial):
+[2025-12-01 17:02:02]   Option: CRUDEOIL25DEC5650PE
+[2025-12-01 17:02:02]   Entry Price: 5365.00
+[2025-12-01 17:02:02]   Exit Price: 374.10
+[2025-12-01 17:02:02]   Quantity: 1
+[2025-12-01 17:02:02]   P&L per unit: -4990.90
+[2025-12-01 17:02:02]   Order ID: N/A
+[2025-12-01 17:02:02] --------------------------------------------------------------------------------
+[2025-12-01 17:02:02] PYRAMIDING RESET CONFIRMED:
+[2025-12-01 17:02:02]   pyramiding_count: 1 -> 0
+[2025-12-01 17:02:02]   first_entry_price: 5365.00 -> None
+[2025-12-01 17:02:02]   last_pyramiding_price: 5365.00 -> None
+[2025-12-01 17:02:02]   pyramiding_positions: 0 positions -> []
+[2025-12-01 17:02:02]   position: SELL -> None
+[2025-12-01 17:02:02] ================================================================================
+[2025-12-01 17:20:05] DELTA CALCULATION | Option Type: CE | Underlying: CRUDEOIL | LTP: 5324.00 | ATM Strike: 5300 | Time to Expiry: 0.0637 years | Risk-free Rate: 10.00%
+[2025-12-01 17:20:05] STRIKES EVALUATED: 7 strikes | Strike List: [5000, 5050, 5100, 5150, 5200, 5250, 5300]
+[2025-12-01 17:20:05]   Strike: 5000 | Symbol: CRUDEOIL25DEC5000CE | Delta: 0.929805 (py_vollib) | IV: 18.89% (py_vollib) | LTP: 363.80 | 
+[2025-12-01 17:20:05]   Strike: 5050 | Symbol: CRUDEOIL25DEC5050CE | Delta: 0.878544 (py_vollib) | IV: 20.54% (py_vollib) | LTP: 323.00 | 
+[2025-12-01 17:20:05]   Strike: 5100 | Symbol: CRUDEOIL25DEC5100CE | Delta: 0.809410 (py_vollib) | IV: 23.09% (py_vollib) | LTP: 289.90 | 
+[2025-12-01 17:20:05]   Strike: 5150 | Symbol: CRUDEOIL25DEC5150CE | Delta: 0.756021 (py_vollib) | IV: 23.63% (py_vollib) | LTP: 254.00 | ✓ SELECTED
+[2025-12-01 17:20:05]   Strike: 5200 | Symbol: CRUDEOIL25DEC5200CE | Delta: 0.696435 (py_vollib) | IV: 24.54% (py_vollib) | LTP: 223.00 | 
+[2025-12-01 17:20:05]   Strike: 5250 | Symbol: CRUDEOIL25DEC5250CE | Delta: 0.637674 (py_vollib) | IV: 25.18% (py_vollib) | LTP: 194.10 | 
+[2025-12-01 17:20:05]   Strike: 5300 | Symbol: CRUDEOIL25DEC5300CE | Delta: 0.580421 (py_vollib) | IV: 25.21% (py_vollib) | LTP: 165.20 | 
+[2025-12-01 17:20:06] ORDER FAILED: BUY CRUDEOIL25DEC5150CE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 254.00 | Error: API Error: Insufficient funds. Required margin is 25400.00 but available margin is 0.00.
+[2025-12-01 17:20:06] BUY ENTRY | Symbol: CRUDEOIL25DECFUT | Price: 5321.00 | Volume: 59 > VolumeMA: 38 | HA_Close: 5321.00 > KC1_Lower: 5310.75 AND KC2_Lower: 5313.78 | HA_High: 5322.00 | HA_Low: 5319.98 | KC1_Upper: 5335.75 | KC1_Lower: 5310.75 | KC2_Upper: 5332.72 | KC2_Lower: 5313.78 | Supertrend: 1.0 | Supertrend_Value: 5313.13 | Selected Option: CRUDEOIL25DEC5150CE | Strike: 5150 | Delta: 0.7560 | IV: 0.2363 | LTP: 254.00 | Order Status: REJECTED | Rejection Reason: Order placement failed - check previous ORDER FAILED log for details
+[2025-12-01 17:55:02] ORDER FAILED: SELL CRUDEOIL25DEC5150CE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 247.90 | Error: API Error: Insufficient funds. Required margin is 208604.38 but available margin is 0.00.
+[2025-12-01 17:55:02] ================================================================================
+[2025-12-01 17:55:02] PYRAMIDING EXIT TRIGGERED | BUY Position | Symbol: CRUDEOIL25DECFUT (CRUDEOIL)
+[2025-12-01 17:55:02] Exit Reason: Supertrend flipped from GREEN (1) to RED (-1)
+[2025-12-01 17:55:02] Total Positions to Exit: 1
+[2025-12-01 17:55:02] --------------------------------------------------------------------------------
+[2025-12-01 17:55:02] Position #1 (Initial):
+[2025-12-01 17:55:02]   Option: CRUDEOIL25DEC5150CE
+[2025-12-01 17:55:02]   Entry Price: 5321.00
+[2025-12-01 17:55:02]   Exit Price: 247.90
+[2025-12-01 17:55:02]   Quantity: 1
+[2025-12-01 17:55:02]   P&L per unit: -5073.10
+[2025-12-01 17:55:02]   Order ID: N/A
+[2025-12-01 17:55:02] --------------------------------------------------------------------------------
+[2025-12-01 17:55:02] PYRAMIDING RESET CONFIRMED:
+[2025-12-01 17:55:02]   pyramiding_count: 1 -> 0
+[2025-12-01 17:55:02]   first_entry_price: 5321.00 -> None
+[2025-12-01 17:55:02]   last_pyramiding_price: 5321.00 -> None
+[2025-12-01 17:55:02]   pyramiding_positions: 0 positions -> []
+[2025-12-01 17:55:02]   position: BUY -> None
+[2025-12-01 17:55:02] ================================================================================
+[2025-12-01 18:03:02] DELTA CALCULATION | Option Type: CE | Underlying: CRUDEOIL | LTP: 5314.00 | ATM Strike: 5300 | Time to Expiry: 0.0636 years | Risk-free Rate: 10.00%
+[2025-12-01 18:03:02] STRIKES EVALUATED: 7 strikes | Strike List: [5000, 5050, 5100, 5150, 5200, 5250, 5300]
+[2025-12-01 18:03:02]   Strike: 5000 | Symbol: CRUDEOIL25DEC5000CE | Delta: 0.894615 (py_vollib) | IV: 21.79% (py_vollib) | LTP: 360.80 | 
+[2025-12-01 18:03:02]   Strike: 5050 | Symbol: CRUDEOIL25DEC5050CE | Delta: 0.844405 (py_vollib) | IV: 23.10% (py_vollib) | LTP: 321.90 | 
+[2025-12-01 18:03:02]   Strike: 5100 | Symbol: CRUDEOIL25DEC5100CE | Delta: 0.794850 (py_vollib) | IV: 23.71% (py_vollib) | LTP: 284.10 | ✓ SELECTED
+[2025-12-01 18:03:02]   Strike: 5150 | Symbol: CRUDEOIL25DEC5150CE | Delta: 0.741464 (py_vollib) | IV: 24.22% (py_vollib) | LTP: 248.90 | 
+[2025-12-01 18:03:02]   Strike: 5200 | Symbol: CRUDEOIL25DEC5200CE | Delta: 0.685779 (py_vollib) | IV: 24.55% (py_vollib) | LTP: 216.00 | 
+[2025-12-01 18:03:02]   Strike: 5250 | Symbol: CRUDEOIL25DEC5250CE | Delta: 0.626443 (py_vollib) | IV: 25.20% (py_vollib) | LTP: 187.80 | 
+[2025-12-01 18:03:02]   Strike: 5300 | Symbol: CRUDEOIL25DEC5300CE | Delta: 0.568931 (py_vollib) | IV: 25.14% (py_vollib) | LTP: 159.00 | 
+[2025-12-01 18:03:03] ORDER FAILED: BUY CRUDEOIL25DEC5100CE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 284.10 | Error: API Error: Insufficient funds. Required margin is 28410.00 but available margin is 0.00.
+[2025-12-01 18:03:03] BUY ENTRY | Symbol: CRUDEOIL25DECFUT | Price: 5315.00 | Volume: 56 > VolumeMA: 20 | HA_Close: 5315.00 > KC1_Lower: 5309.04 AND KC2_Lower: 5311.95 | HA_High: 5317.00 | HA_Low: 5313.00 | KC1_Upper: 5330.51 | KC1_Lower: 5309.04 | KC2_Upper: 5327.60 | KC2_Lower: 5311.95 | Supertrend: -1.0 | Supertrend_Value: 5322.48 | Selected Option: CRUDEOIL25DEC5100CE | Strike: 5100 | Delta: 0.7949 | IV: 0.2371 | LTP: 284.10 | Order Status: REJECTED | Rejection Reason: Order placement failed - check previous ORDER FAILED log for details
+[2025-12-01 20:03:01] ARMED SELL | Symbol: CRUDEOIL25DECFUT | HA_High: 5327.00 >= KC1_Upper (Outer): 5323.45 | HA_Close: 5321.25 | Volume: 149 | Note: BUY position active, SELL entry will wait for BUY exit
+[2025-12-01 20:03:01] ARMED BUY RESET | Symbol: CRUDEOIL25DECFUT | HA_High: 5327.00 > KC1_Upper: 5323.45 AND KC2_Upper: 5315.74
+[2025-12-01 20:57:02] ORDER FAILED: SELL CRUDEOIL25DEC5100CE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 291.00 | Error: API Error: Insufficient funds. Required margin is 211954.50 but available margin is 0.00.
+[2025-12-01 20:57:02] ================================================================================
+[2025-12-01 20:57:02] PYRAMIDING EXIT TRIGGERED | BUY Position | Symbol: CRUDEOIL25DECFUT (CRUDEOIL)
+[2025-12-01 20:57:02] Exit Reason: Supertrend flipped from GREEN (1) to RED (-1)
+[2025-12-01 20:57:02] Total Positions to Exit: 1
+[2025-12-01 20:57:02] --------------------------------------------------------------------------------
+[2025-12-01 20:57:02] Position #1 (Initial):
+[2025-12-01 20:57:02]   Option: CRUDEOIL25DEC5100CE
+[2025-12-01 20:57:02]   Entry Price: 5315.00
+[2025-12-01 20:57:02]   Exit Price: 291.00
+[2025-12-01 20:57:02]   Quantity: 1
+[2025-12-01 20:57:02]   P&L per unit: -5024.00
+[2025-12-01 20:57:02]   Order ID: N/A
+[2025-12-01 20:57:02] --------------------------------------------------------------------------------
+[2025-12-01 20:57:02] PYRAMIDING RESET CONFIRMED:
+[2025-12-01 20:57:02]   pyramiding_count: 1 -> 0
+[2025-12-01 20:57:02]   first_entry_price: 5315.00 -> None
+[2025-12-01 20:57:02]   last_pyramiding_price: 5315.00 -> None
+[2025-12-01 20:57:02]   pyramiding_positions: 0 positions -> []
+[2025-12-01 20:57:02]   position: BUY -> None
+[2025-12-01 20:57:02] ================================================================================
+[2025-12-01 21:22:02] DELTA CALCULATION | Option Type: PE | Underlying: CRUDEOIL | LTP: 5346.00 | ATM Strike: 5350 | Time to Expiry: 0.0633 years | Risk-free Rate: 10.00%
+[2025-12-01 21:22:02] STRIKES EVALUATED: 7 strikes | Strike List: [5350, 5400, 5450, 5500, 5550, 5600, 5650]
+[2025-12-01 21:22:02]   Strike: 5350 | Symbol: CRUDEOIL25DEC5350PE | Delta: -0.456227 (py_vollib) | IV: 31.59% (py_vollib) | LTP: 154.50 | 
+[2025-12-01 21:22:02]   Strike: 5400 | Symbol: CRUDEOIL25DEC5400PE | Delta: -0.502478 (py_vollib) | IV: 31.93% (py_vollib) | LTP: 181.70 | 
+[2025-12-01 21:22:02]   Strike: 5450 | Symbol: CRUDEOIL25DEC5450PE | Delta: -0.546753 (py_vollib) | IV: 32.49% (py_vollib) | LTP: 212.40 | 
+[2025-12-01 21:22:02]   Strike: 5500 | Symbol: CRUDEOIL25DEC5500PE | Delta: -0.588709 (py_vollib) | IV: 33.02% (py_vollib) | LTP: 245.00 | 
+[2025-12-01 21:22:02]   Strike: 5550 | Symbol: CRUDEOIL25DEC5550PE | Delta: -0.626078 (py_vollib) | IV: 33.97% (py_vollib) | LTP: 281.70 | 
+[2025-12-01 21:22:02]   Strike: 5600 | Symbol: CRUDEOIL25DEC5600PE | Delta: -0.662601 (py_vollib) | IV: 34.43% (py_vollib) | LTP: 317.60 | 
+[2025-12-01 21:22:02]   Strike: 5650 | Symbol: CRUDEOIL25DEC5650PE | Delta: -0.674383 (py_vollib) | IV: 38.87% (py_vollib) | LTP: 374.10 | ✓ SELECTED
+[2025-12-01 21:22:03] ORDER FAILED: BUY CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 37410.00 but available margin is 0.00.
+[2025-12-01 21:22:03] SELL ENTRY | Symbol: CRUDEOIL25DECFUT | Price: 5344.75 | Volume: 41 > VolumeMA: 32 | HA_Close: 5344.75 < KC1_Upper: 5356.44 AND KC2_Upper: 5352.50 | HA_High: 5346.30 | HA_Low: 5343.00 | KC1_Upper: 5356.44 | KC1_Lower: 5326.68 | KC2_Upper: 5352.50 | KC2_Lower: 5330.62 | Supertrend: 1.0 | Supertrend_Value: 5342.84 | Selected Option: CRUDEOIL25DEC5650PE | Strike: 5650 | Delta: -0.6744 | IV: 0.3887 | LTP: 374.10 | Order Status: REJECTED | Rejection Reason: Order placement failed - check previous ORDER FAILED log for details
+[2025-12-01 22:37:02] ORDER FAILED: SELL CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 216957.13 but available margin is 0.00.
+[2025-12-01 22:37:02] ================================================================================
+[2025-12-01 22:37:02] PYRAMIDING EXIT TRIGGERED | SELL Position | Symbol: CRUDEOIL25DECFUT (CRUDEOIL)
+[2025-12-01 22:37:02] Exit Reason: Supertrend flipped from RED (-1) to GREEN (1)
+[2025-12-01 22:37:02] Total Positions to Exit: 1
+[2025-12-01 22:37:02] --------------------------------------------------------------------------------
+[2025-12-01 22:37:02] Position #1 (Initial):
+[2025-12-01 22:37:02]   Option: CRUDEOIL25DEC5650PE
+[2025-12-01 22:37:02]   Entry Price: 5344.75
+[2025-12-01 22:37:02]   Exit Price: 374.10
+[2025-12-01 22:37:02]   Quantity: 1
+[2025-12-01 22:37:02]   P&L per unit: -4970.65
+[2025-12-01 22:37:02]   Order ID: N/A
+[2025-12-01 22:37:02] --------------------------------------------------------------------------------
+[2025-12-01 22:37:02] PYRAMIDING RESET CONFIRMED:
+[2025-12-01 22:37:02]   pyramiding_count: 1 -> 0
+[2025-12-01 22:37:02]   first_entry_price: 5344.75 -> None
+[2025-12-01 22:37:02]   last_pyramiding_price: 5344.75 -> None
+[2025-12-01 22:37:02]   pyramiding_positions: 0 positions -> []
+[2025-12-01 22:37:02]   position: SELL -> None
+[2025-12-01 22:37:02] ================================================================================
+[2025-12-01 22:41:02] DELTA CALCULATION | Option Type: PE | Underlying: CRUDEOIL | LTP: 5328.00 | ATM Strike: 5350 | Time to Expiry: 0.0631 years | Risk-free Rate: 10.00%
+[2025-12-01 22:41:02] STRIKES EVALUATED: 7 strikes | Strike List: [5350, 5400, 5450, 5500, 5550, 5600, 5650]
+[2025-12-01 22:41:02]   Strike: 5350 | Symbol: CRUDEOIL25DEC5350PE | Delta: -0.473165 (py_vollib) | IV: 31.65% (py_vollib) | LTP: 163.00 | 
+[2025-12-01 22:41:02]   Strike: 5400 | Symbol: CRUDEOIL25DEC5400PE | Delta: -0.519191 (py_vollib) | IV: 32.03% (py_vollib) | LTP: 191.30 | 
+[2025-12-01 22:41:02]   Strike: 5450 | Symbol: CRUDEOIL25DEC5450PE | Delta: -0.563762 (py_vollib) | IV: 32.32% (py_vollib) | LTP: 221.30 | 
+[2025-12-01 22:41:02]   Strike: 5500 | Symbol: CRUDEOIL25DEC5500PE | Delta: -0.604415 (py_vollib) | IV: 33.08% (py_vollib) | LTP: 255.90 | 
+[2025-12-01 22:41:02]   Strike: 5550 | Symbol: CRUDEOIL25DEC5550PE | Delta: -0.640469 (py_vollib) | IV: 34.12% (py_vollib) | LTP: 293.70 | 
+[2025-12-01 22:41:02]   Strike: 5600 | Symbol: CRUDEOIL25DEC5600PE | Delta: -0.675961 (py_vollib) | IV: 34.62% (py_vollib) | LTP: 330.40 | 
+[2025-12-01 22:41:02]   Strike: 5650 | Symbol: CRUDEOIL25DEC5650PE | Delta: -0.701486 (py_vollib) | IV: 36.30% (py_vollib) | LTP: 374.10 | ✓ SELECTED
+[2025-12-01 22:41:03] ORDER FAILED: BUY CRUDEOIL25DEC5650PE | Exchange: MCX | Quantity: 1 | Product: NRML | OrderType: LIMIT | Price: 374.10 | Error: API Error: Insufficient funds. Required margin is 37410.00 but available margin is 0.00.
+[2025-12-01 22:41:03] SELL ENTRY | Symbol: CRUDEOIL25DECFUT | Price: 5327.50 | Volume: 36 > VolumeMA: 18 | HA_Close: 5327.50 < KC1_Upper: 5336.75 AND KC2_Upper: 5333.13 | HA_High: 5328.00 | HA_Low: 5325.70 | KC1_Upper: 5336.75 | KC1_Lower: 5309.06 | KC2_Upper: 5333.13 | KC2_Lower: 5312.68 | Supertrend: 1.0 | Supertrend_Value: 5315.83 | Selected Option: CRUDEOIL25DEC5650PE | Strike: 5650 | Delta: -0.7015 | IV: 0.3630 | LTP: 374.10 | Order Status: REJECTED | Rejection Reason: Order placement failed - check previous ORDER FAILED log for details

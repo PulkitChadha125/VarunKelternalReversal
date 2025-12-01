@@ -1,2 +1,2 @@
 Symbol,Expiery,Timeframe,StrikeStep,StrikeNumber,Lotsize,VolumeMa,SupertrendPeriod,SupertrendMul,KC1_Length,KC1_Mul,KC1_ATR,KC2_Length,KC2_Mul,KC2_ATR,PyramidingDistance,PyramidingNumber
-CRUDEOIL,25-12-2025,minute,50,6,1,29,10,3,50,3.75,12,50,2.75,14,50,2
+CRUDEOIL,25-12-2025,5minute,100,3,1,29,10,3,50,3.75,12,50,2.75,14,50,2
