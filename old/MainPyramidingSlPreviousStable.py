@@ -45,96 +45,6 @@ def write_to_order_logs(message):
         print(f"[OrderLog] Error writing to log: {str(e)}")
 
 
-def initialize_signal_csv():
-    """
-    Initialize or verify signal.csv file with all required columns.
-    Creates the file with headers if it doesn't exist.
-    If file exists, checks and adds any missing columns.
-    """
-    csv_file = 'signal.csv'
-    required_columns = [
-        'timestamp', 'action', 'optionprice', 'optioncontract', 'futurecontract', 
-        'futureprice', 'lotsize', 'Stop loss', 'Margin', 'Points Captured', 
-        'Charges', 'P&L (Abs.)', 'P&L (%)'
-    ]
-    
-    try:
-        file_exists = Path(csv_file).exists()
-        
-        if not file_exists:
-            # File doesn't exist - create it with all headers
-            print(f"[CSV Init] Creating {csv_file} with headers...")
-            with open(csv_file, 'w', newline='', encoding='utf-8') as file:
-                writer = csv.writer(file)
-                writer.writerow(required_columns)
-            print(f"[CSV Init] ✓ {csv_file} created successfully with {len(required_columns)} columns")
-            return
-        
-        # File exists - check if all columns are present
-        with open(csv_file, 'r', newline='', encoding='utf-8') as file:
-            reader = csv.reader(file)
-            try:
-                existing_headers = next(reader)
-            except StopIteration:
-                # File is empty - write headers
-                print(f"[CSV Init] File {csv_file} is empty, writing headers...")
-                with open(csv_file, 'w', newline='', encoding='utf-8') as write_file:
-                    writer = csv.writer(write_file)
-                    writer.writerow(required_columns)
-                print(f"[CSV Init] ✓ Headers written to {csv_file}")
-                return
-        
-        # Normalize headers (convert to lowercase, strip spaces)
-        existing_headers_normalized = [h.strip().lower() for h in existing_headers if h.strip()]
-        required_columns_normalized = [h.strip().lower() for h in required_columns]
-        
-        # Check for missing columns
-        missing_columns = []
-        for req_col in required_columns:
-            req_col_normalized = req_col.strip().lower()
-            if req_col_normalized not in existing_headers_normalized:
-                missing_columns.append(req_col)
-        
-        if missing_columns:
-            # Add missing columns to header
-            print(f"[CSV Init] Found {len(missing_columns)} missing columns in {csv_file}")
-            print(f"[CSV Init] Missing columns: {missing_columns}")
-            
-            # Read all existing data
-            with open(csv_file, 'r', newline='', encoding='utf-8') as file:
-                reader = csv.reader(file)
-                rows = list(reader)
-            
-            if len(rows) > 0:
-                # Update header row with missing columns
-                updated_header = existing_headers + missing_columns
-                rows[0] = updated_header
-                
-                # Add empty values for missing columns in data rows
-                num_missing = len(missing_columns)
-                for i in range(1, len(rows)):
-                    rows[i].extend([''] * num_missing)
-                
-                # Write back to file
-                with open(csv_file, 'w', newline='', encoding='utf-8') as file:
-                    writer = csv.writer(file)
-                    writer.writerows(rows)
-                
-                print(f"[CSV Init] ✓ Added {len(missing_columns)} missing columns to {csv_file}")
-            else:
-                # Only header row exists - just update it
-                with open(csv_file, 'w', newline='', encoding='utf-8') as file:
-                    writer = csv.writer(file)
-                    writer.writerow(required_columns)
-                print(f"[CSV Init] ✓ Updated headers in {csv_file}")
-        else:
-            print(f"[CSV Init] ✓ {csv_file} already has all required columns")
-            
-    except Exception as e:
-        print(f"[CSV Init] Error initializing {csv_file}: {str(e)}")
-        traceback.print_exc()
-
-
 def write_to_signal_csv(action, option_price=None, option_contract=None, future_contract=None, future_price=None, lotsize=0, 
                         stop_loss=None, entry_future_price=None, entry_option_price=None, charges=63, position_num=None):
     """
@@ -159,11 +69,8 @@ def write_to_signal_csv(action, option_price=None, option_contract=None, future_
         # Format: DD-MM-YYYY HH:MM
         timestamp = datetime.now().strftime("%d-%m-%Y %H:%M")
         
-        # Ensure file exists and has all columns (safety check)
+        # Check if file exists, if not create with headers
         file_exists = Path(csv_file).exists()
-        if not file_exists:
-            # File was deleted - reinitialize it
-            initialize_signal_csv()
         
         # Calculate Margin: OptionPrice × Lotsize × 100 (only for entries, not exits)
         margin = ""
@@ -223,66 +130,30 @@ def write_to_signal_csv(action, option_price=None, option_contract=None, future_
         # Format charges (integer, only for exits)
         charges_str = f"{int(charges)}" if charges and 'exit' in action.lower() else ""
         
-        # Read existing headers to ensure we write data in correct order
-        existing_headers = []
-        if file_exists:
-            try:
-                with open(csv_file, 'r', newline='', encoding='utf-8') as file:
-                    reader = csv.reader(file)
-                    existing_headers = next(reader)
-            except (StopIteration, FileNotFoundError):
-                # File is empty or was deleted - reinitialize
-                initialize_signal_csv()
-                existing_headers = ['timestamp', 'action', 'optionprice', 'optioncontract', 'futurecontract', 
-                                   'futureprice', 'lotsize', 'Stop loss', 'Margin', 'Points Captured', 
-                                   'Charges', 'P&L (Abs.)', 'P&L (%)']
-        
-        # Define column order (standard order)
-        column_order = ['timestamp', 'action', 'optionprice', 'optioncontract', 'futurecontract', 
-                       'futureprice', 'lotsize', 'Stop loss', 'Margin', 'Points Captured', 
-                       'Charges', 'P&L (Abs.)', 'P&L (%)']
-        
-        # Create data dictionary for easy mapping
-        data_dict = {
-            'timestamp': timestamp,
-            'action': action,
-            'optionprice': option_price_str,
-            'optioncontract': option_contract if option_contract else "",
-            'futurecontract': future_contract if future_contract else "",
-            'futureprice': future_price_str,
-            'lotsize': lotsize if lotsize else "",
-            'Stop loss': stop_loss_str,
-            'Margin': margin_str,
-            'Points Captured': points_captured,
-            'Charges': charges_str,
-            'P&L (Abs.)': pnl_abs,
-            'P&L (%)': pnl_percent
-        }
-        
-        # Build row in the order of existing headers (or standard order if file is new)
-        if existing_headers:
-            # Use existing header order (handles case-insensitive matching)
-            row_data = []
-            for header in existing_headers:
-                header_normalized = header.strip().lower()
-                # Find matching column (case-insensitive)
-                matched = False
-                for col_name, col_value in data_dict.items():
-                    if col_name.strip().lower() == header_normalized:
-                        row_data.append(col_value)
-                        matched = True
-                        break
-                if not matched:
-                    # Column exists in file but not in our data - add empty value
-                    row_data.append("")
-        else:
-            # Use standard order
-            row_data = [data_dict[col] for col in column_order]
-        
-        # Append data row
         with open(csv_file, 'a', newline='', encoding='utf-8') as file:
             writer = csv.writer(file)
-            writer.writerow(row_data)
+            
+            # Write header if file is new
+            if not file_exists:
+                writer.writerow(['timestamp', 'action', 'optionprice', 'optioncontract', 'futurecontract', 'futureprice', 'lotsize', 
+                                'Stop loss', 'Margin', 'Points Captured', 'Charges', 'P&L (Abs.)', 'P&L (%)'])
+            
+            # Write data row
+            writer.writerow([
+                timestamp,
+                action,
+                option_price_str,
+                option_contract if option_contract else "",
+                future_contract if future_contract else "",
+                future_price_str,
+                lotsize if lotsize else "",
+                stop_loss_str,
+                margin_str,
+                points_captured,
+                charges_str,
+                pnl_abs,
+                pnl_percent
+            ])
         
         print(f"[Signal CSV] Logged: {action} | Option: {option_contract if option_contract else 'N/A'} | Future: {future_contract if future_contract else 'N/A'} | OptionPrice: {option_price_str if option_price_str else 'N/A'} | FuturePrice: {future_price_str if future_price_str else 'N/A'} | Lotsize: {lotsize}")
     except Exception as e:
@@ -545,8 +416,6 @@ def get_user_settings():
             KC2_ATR = row['KC2_ATR']
             PyramidingDistance = float(row['PyramidingDistance'])
             PyramidingNumber = int(row['PyramidingNumber'])
-            SLATR = int(row['SLATR'])  # ATR period for initial SL calculation
-            SLMULTIPLIER = float(row['SLMULTIPLIER'])  # Multiplier for ATR in initial SL calculation
             # Store settings in result_dict
             result_dict[unique_key] = {
                 'Symbol': symbol,
@@ -567,8 +436,6 @@ def get_user_settings():
                 'KC2_ATR': KC2_ATR,
                 'PyramidingDistance': PyramidingDistance,
                 'PyramidingNumber': PyramidingNumber,
-                'SLATR': SLATR,  # ATR period for initial SL calculation
-                'SLMULTIPLIER': SLMULTIPLIER,  # Multiplier for ATR in initial SL calculation
                 # Additional fields can be added here
                 'InstrumentToken': None,  # Will be populated when instrument is found
                 'Exchange': None,  # Will be populated when instrument is found
@@ -1742,25 +1609,21 @@ def find_option_with_max_delta(
         return None
 
 
-def calculate_initial_sl(df: pl.DataFrame, position_type: str, sl_atr_period: int, sl_multiplier: float) -> float:
+def calculate_initial_sl(df: pl.DataFrame, position_type: str) -> float:
     """
-    Calculate initial stop loss from last 5 candles with ATR adjustment.
-    
-    Formula:
-    - BUY: Initial SL = Lowest HA_Low of last 5 candles - (ATR × SLMULTIPLIER)
-    - SELL: Initial SL = Highest HA_High of last 5 candles + (ATR × SLMULTIPLIER)
+    Calculate initial stop loss from last 5 candles.
     
     Args:
         df: Polars DataFrame with Heikin-Ashi data
         position_type: 'BUY' or 'SELL'
-        sl_atr_period: ATR period for calculation (e.g., 14)
-        sl_multiplier: Multiplier for ATR (e.g., 2.0)
     
     Returns:
-        Initial SL value with ATR adjustment
+        Initial SL value:
+        - For BUY: Lowest HA_Low of last 5 candles
+        - For SELL: Highest HA_High of last 5 candles
     """
     try:
-        # Get last 5 candles (excluding current candle) for finding lowest low/highest high
+        # Get last 5 candles (excluding current candle)
         if df.height < 6:
             # If not enough candles, use all available (excluding current)
             candles_for_sl = df.head(df.height - 1) if df.height > 1 else df
@@ -1771,80 +1634,20 @@ def calculate_initial_sl(df: pl.DataFrame, position_type: str, sl_atr_period: in
         if candles_for_sl.height == 0:
             return None
         
-        # Calculate ATR using pandas_ta on full Heikin-Ashi data (ATR needs sufficient data)
-        # Convert full dataframe to pandas for ATR calculation
-        df_full_pd = df.to_pandas()
-        
-        # Ensure we have the required Heikin-Ashi columns
-        if not all(col in df_full_pd.columns for col in ['ha_high', 'ha_low', 'ha_close']):
-            raise ValueError("DataFrame must contain ha_high, ha_low, and ha_close columns")
-        
-        # Calculate ATR using pandas_ta on Heikin-Ashi data (use full dataframe for accurate ATR)
-        atr_result = ta.atr(
-            high=df_full_pd['ha_high'],
-            low=df_full_pd['ha_low'],
-            close=df_full_pd['ha_close'],
-            length=sl_atr_period
-        )
-        
-        if atr_result is None or len(atr_result) == 0:
-            print(f"[SL Calculation] Error: Could not calculate ATR. Falling back to simple lowest low/highest high.")
-            # Fallback: return simple lowest low/highest high without ATR adjustment
-            if position_type == 'BUY':
-                lowest_low = candles_for_sl['ha_low'].min()
-                return float(lowest_low)
-            elif position_type == 'SELL':
-                highest_high = candles_for_sl['ha_high'].max()
-                return float(highest_high)
-            else:
-                return None
-        
-        # Get the last ATR value (most recent)
-        # ATR is calculated on historical data, so the last value is the most recent ATR
-        current_atr = float(atr_result.iloc[-1])
-        
-        # Calculate ATR adjustment
-        atr_adjustment = current_atr * sl_multiplier
-        
         if position_type == 'BUY':
-            # For BUY: Lowest low of last 5 candles - (ATR × Multiplier)
+            # For BUY: Lowest low of last 5 candles
             lowest_low = candles_for_sl['ha_low'].min()
-            initial_sl = float(lowest_low) - atr_adjustment
-            print(f"[SL Calculation] BUY Initial SL: Lowest Low ({lowest_low:.2f}) - ATR Adjustment ({atr_adjustment:.2f} = ATR {current_atr:.2f} × {sl_multiplier}) = {initial_sl:.2f}")
-            return initial_sl
+            return float(lowest_low)
         elif position_type == 'SELL':
-            # For SELL: Highest high of last 5 candles + (ATR × Multiplier)
+            # For SELL: Highest high of last 5 candles
             highest_high = candles_for_sl['ha_high'].max()
-            initial_sl = float(highest_high) + atr_adjustment
-            print(f"[SL Calculation] SELL Initial SL: Highest High ({highest_high:.2f}) + ATR Adjustment ({atr_adjustment:.2f} = ATR {current_atr:.2f} × {sl_multiplier}) = {initial_sl:.2f}")
-            return initial_sl
+            return float(highest_high)
         else:
             return None
             
     except Exception as e:
         print(f"[SL Calculation] Error calculating initial SL: {str(e)}")
-        traceback.print_exc()
-        # Fallback: return simple lowest low/highest high without ATR adjustment
-        try:
-            if df.height < 6:
-                candles_for_sl = df.head(df.height - 1) if df.height > 1 else df
-            else:
-                candles_for_sl = df.tail(6).head(5)
-            
-            if candles_for_sl.height == 0:
-                return None
-            
-            if position_type == 'BUY':
-                lowest_low = candles_for_sl['ha_low'].min()
-                return float(lowest_low)
-            elif position_type == 'SELL':
-                highest_high = candles_for_sl['ha_high'].max()
-                return float(highest_high)
-            else:
-                return None
-        except Exception as fallback_error:
-            print(f"[SL Calculation] Fallback also failed: {str(fallback_error)}")
-            return None
+        return None
 
 
 def calculate_average_entry_price(entry_prices: list) -> float:
@@ -2749,15 +2552,13 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         entry_option_price = option_ltp if option_ltp else (selected_option.get('ltp_float', None) if selected_option else None)
                         trading_state['entry_option_price'] = entry_option_price  # Store for P&L calculation
                         
-                        # Calculate initial stop loss with ATR adjustment (lowest low of last 5 candles - ATR × Multiplier for BUY)
-                        sl_atr_period = int(params.get('SLATR', 14))
-                        sl_multiplier = float(params.get('SLMULTIPLIER', 2.0))
-                        initial_sl = calculate_initial_sl(df, 'BUY', sl_atr_period, sl_multiplier)
+                        # Calculate initial stop loss (lowest low of last 5 candles for BUY)
+                        initial_sl = calculate_initial_sl(df, 'BUY')
                         if initial_sl is not None:
                             trading_state['initial_sl'] = initial_sl
                             trading_state['current_sl'] = initial_sl  # Initially, current_sl = initial_sl
                             trading_state['entry_prices'] = [ha_close]  # Track all entry prices for averaging
-                            write_to_order_logs(f"INITIAL SL CALCULATED | BUY Position | Initial SL: {initial_sl:.2f} (Lowest Low of last 5 candles - ATR {sl_atr_period} × {sl_multiplier})")
+                            write_to_order_logs(f"INITIAL SL CALCULATED | BUY Position | Initial SL: {initial_sl:.2f} (Lowest Low of last 5 candles)")
                         else:
                             write_to_order_logs(f"WARNING: Could not calculate initial SL for BUY position")
                         
@@ -2980,15 +2781,13 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         entry_option_price = option_ltp if option_ltp else (selected_option.get('ltp_float', None) if selected_option else None)
                         trading_state['entry_option_price'] = entry_option_price  # Store for P&L calculation
                         
-                        # Calculate initial stop loss with ATR adjustment (highest high of last 5 candles + ATR × Multiplier for SELL)
-                        sl_atr_period = int(params.get('SLATR', 14))
-                        sl_multiplier = float(params.get('SLMULTIPLIER', 2.0))
-                        initial_sl = calculate_initial_sl(df, 'SELL', sl_atr_period, sl_multiplier)
+                        # Calculate initial stop loss (highest high of last 5 candles for SELL)
+                        initial_sl = calculate_initial_sl(df, 'SELL')
                         if initial_sl is not None:
                             trading_state['initial_sl'] = initial_sl
                             trading_state['current_sl'] = initial_sl  # Initially, current_sl = initial_sl
                             trading_state['entry_prices'] = [ha_close]  # Track all entry prices for averaging
-                            write_to_order_logs(f"INITIAL SL CALCULATED | SELL Position | Initial SL: {initial_sl:.2f} (Highest High of last 5 candles + ATR {sl_atr_period} × {sl_multiplier})")
+                            write_to_order_logs(f"INITIAL SL CALCULATED | SELL Position | Initial SL: {initial_sl:.2f} (Highest High of last 5 candles)")
                         else:
                             write_to_order_logs(f"WARNING: Could not calculate initial SL for SELL position")
                         
@@ -3066,144 +2865,31 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                                 should_add_pyramiding = True
                     
                     if should_add_pyramiding:
-                        # Get initial option symbol as fallback
+                        # Get the same option symbol as initial entry
                         initial_option_symbol = trading_state.get('option_symbol', None)
                         option_exchange = trading_state.get('option_exchange', None)
-                        
-                        # Get trading settings for strike calculation
-                        strike_step = int(params.get('StrikeStep', 50))
-                        strike_number = int(params.get('StrikeNumber', 6))
-                        expiry = params.get('Expiry', '')  # Stored as 'Expiry' in result_dict (CSV column is 'Expiery')
                         
                         # Prepare CSV logging variables (will be used regardless of order success/failure)
                         csv_pyramiding_option_price = 0
                         csv_pyramiding_option_contract = "N/A"
+                        if initial_option_symbol:
+                            csv_pyramiding_option_contract = initial_option_symbol
                         
-                        # Recalculate strike based on current LTP
-                        selected_pyramiding_option = None
-                        pyramiding_ltp = None
-                        
-                        if kite_client and option_exchange:
-                            try:
-                                write_to_order_logs("="*80)
-                                write_to_order_logs(f"PYRAMIDING STRIKE SELECTION | {current_position} Position #{pyramiding_count + 1}")
-                                write_to_order_logs(f"  Symbol: {future_symbol} ({symbol})")
-                                write_to_order_logs(f"  Current HA Close: {ha_close:.2f}")
-                                
-                                # Find exchange for future symbol
-                                underlying_exchange = find_exchange_for_symbol(kite_client, future_symbol)
-                                
-                                # Get fresh LTP for future symbol
-                                ltp = None
-                                if underlying_exchange:
-                                    ltp = get_ltp(kite_client, underlying_exchange, future_symbol)
-                                
-                                # If LTP not available, use ha_close as approximation
-                                if not ltp:
-                                    ltp = ha_close
-                                    write_to_order_logs(f"  WARNING: LTP not available for {future_symbol}, using HA_Close: {ltp:.2f}")
-                                else:
-                                    write_to_order_logs(f"  Fresh LTP: {ltp:.2f}")
-                                
-                                pyramiding_ltp = ltp
-                                
-                                # Normalize strike and create strike list
-                                atm = normalize_strike(ltp, strike_step)
-                                all_strikes = create_strike_list(atm, strike_step, strike_number)
-                                
-                                write_to_order_logs(f"  Normalized ATM: {atm}")
-                                write_to_order_logs(f"  Strike List: {all_strikes}")
-                                
-                                # Determine option type and filter strikes
-                                if current_position == 'BUY':
-                                    # For BUY: Find max delta CALL option from strikes below ATM (including ATM)
-                                    option_type = 'CE'
-                                    filtered_strikes = [s for s in all_strikes if s <= atm]
-                                else:  # SELL
-                                    # For SELL: Find max delta PUT option from strikes above ATM (including ATM)
-                                    option_type = 'PE'
-                                    filtered_strikes = [s for s in all_strikes if s >= atm]
-                                
-                                write_to_order_logs(f"  Option Type: {option_type}")
-                                write_to_order_logs(f"  Filtered Strikes: {filtered_strikes}")
-                                
-                                # Use 10% risk-free rate for MCX, 6% for NFO
-                                risk_free_rate = 0.10 if option_exchange == "MCX" else 0.06
-                                
-                                # Find option with max delta
-                                if expiry and filtered_strikes:
-                                    selected_pyramiding_option = find_option_with_max_delta(
-                                        kite=kite_client,
-                                        symbol=symbol,
-                                        expiry=expiry,
-                                        exchange=option_exchange,
-                                        strikes=filtered_strikes,
-                                        ltp=ltp,
-                                        option_type=option_type,
-                                        risk_free_rate=risk_free_rate
-                                    )
-                                
-                                if selected_pyramiding_option:
-                                    csv_pyramiding_option_contract = selected_pyramiding_option['option_symbol']
-                                    write_to_order_logs(f"  ✓ SELECTED STRIKE: {selected_pyramiding_option['strike']}")
-                                    write_to_order_logs(f"  ✓ SELECTED OPTION: {selected_pyramiding_option['option_symbol']}")
-                                    write_to_order_logs(f"  ✓ DELTA: {selected_pyramiding_option['delta']:.6f}")
-                                    write_to_order_logs(f"  ✓ IV: {selected_pyramiding_option['iv']*100:.2f}% (Source: {selected_pyramiding_option['iv_source']})")
-                                    write_to_order_logs(f"  ✓ OPTION LTP: {selected_pyramiding_option.get('ltp', 'N/A')}")
-                                    
-                                    # Log all strikes evaluated
-                                    if 'all_strikes_evaluated' in selected_pyramiding_option:
-                                        strikes_evaluated = selected_pyramiding_option['all_strikes_evaluated']
-                                        write_to_order_logs(f"  STRIKES EVALUATED: {len(strikes_evaluated)} strikes")
-                                        for strike_data in strikes_evaluated:
-                                            strike_log = (
-                                                f"    Strike: {strike_data['strike']} | Symbol: {strike_data['option_symbol']} | "
-                                                f"Delta: {strike_data['delta']:.6f} | IV: {strike_data['iv']*100:.2f}% ({strike_data['iv_source']}) | "
-                                                f"LTP: {strike_data['ltp']} | {'✓ SELECTED' if strike_data['strike'] == selected_pyramiding_option['strike'] else ''}"
-                                            )
-                                            write_to_order_logs(strike_log)
-                                else:
-                                    # Fallback to initial option symbol
-                                    write_to_order_logs(f"  WARNING: Strike selection failed, falling back to initial option: {initial_option_symbol}")
-                                    selected_pyramiding_option = None
-                                
-                                write_to_order_logs("="*80)
-                                
-                            except Exception as e:
-                                print(f"[Pyramiding] Error in strike selection: {str(e)}")
-                                write_to_order_logs(f"PYRAMIDING STRIKE SELECTION ERROR | {current_position} Position | Error: {str(e)}")
-                                write_to_order_logs(f"  Falling back to initial option: {initial_option_symbol}")
-                                traceback.print_exc()
-                        
-                        # Determine which option symbol to use (newly selected or fallback to initial)
-                        final_option_symbol = None
-                        if selected_pyramiding_option:
-                            final_option_symbol = selected_pyramiding_option['option_symbol']
-                        elif initial_option_symbol:
-                            final_option_symbol = initial_option_symbol
-                            write_to_order_logs(f"PYRAMIDING: Using fallback initial option symbol: {initial_option_symbol}")
-                        else:
-                            write_to_order_logs(f"PYRAMIDING ERROR: No option symbol available (neither selected nor initial)")
-                        
-                        # Prepare CSV logging
-                        if final_option_symbol:
-                            csv_pyramiding_option_contract = final_option_symbol
-                        
-                        if final_option_symbol and option_exchange and kite_client:
+                        if initial_option_symbol and option_exchange and kite_client:
                             try:
                                 # Get current option LTP for LIMIT order
-                                quote = get_option_quote(kite_client, option_exchange, final_option_symbol)
+                                quote = get_option_quote(kite_client, option_exchange, initial_option_symbol)
                                 option_ltp = quote.get('last_price', None)
                                 if option_ltp is not None:
                                     option_ltp = float(option_ltp)
                                     csv_pyramiding_option_price = option_ltp
                                 
-                                # Place pyramiding order with newly selected (or fallback) option
+                                # Place pyramiding order (same option, same direction as initial entry)
                                 transaction_type = "BUY"  # Always BUY for pyramiding (we're adding positions)
                                 order_response = place_option_order(
                                     kite=kite_client,
                                     exchange=option_exchange,
-                                    option_symbol=final_option_symbol,
+                                    option_symbol=initial_option_symbol,
                                     transaction_type=transaction_type,
                                     quantity=lotsize,
                                     order_type="LIMIT",
@@ -3219,7 +2905,7 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                                 # Add to pyramiding_positions list (always, even if order was rejected)
                                 order_id = order_response.get('order_id', None) if order_response else None
                                 trading_state['pyramiding_positions'].append({
-                                    'option_symbol': final_option_symbol,  # Store the actual option used (newly selected or fallback)
+                                    'option_symbol': initial_option_symbol,
                                     'order_id': order_id,
                                     'entry_price': ha_close,  # Future price (HA_Close)
                                     'entry_option_price': option_ltp if option_ltp else 0  # Option price at entry
@@ -3255,11 +2941,7 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                                     f"PYRAMIDING TRADE PLACED | {current_position} Position #{pyramiding_count} of {pyramiding_number + 1} max"
                                 )
                                 write_to_order_logs(f"  Symbol: {future_symbol} ({symbol})")
-                                write_to_order_logs(f"  Option: {final_option_symbol}")
-                                if selected_pyramiding_option:
-                                    write_to_order_logs(f"  Strike Selection: NEW (Strike: {selected_pyramiding_option['strike']}, Delta: {selected_pyramiding_option['delta']:.6f})")
-                                else:
-                                    write_to_order_logs(f"  Strike Selection: FALLBACK (Initial Option: {initial_option_symbol})")
+                                write_to_order_logs(f"  Option: {initial_option_symbol}")
                                 write_to_order_logs(f"  Entry Price: {ha_close:.2f}")
                                 write_to_order_logs(f"  First Entry Price: {first_entry_price:.2f}")
                                 write_to_order_logs(f"  Reference Price (for calculation): {reference_price:.2f}")
@@ -3610,10 +3292,6 @@ if __name__ == "__main__":
         print("\n[Main] Fetching user settings...")
         get_user_settings()
         print("[Main] User settings loaded successfully!")
-        
-        # Step 3.5: Initialize/verify signal.csv file
-        print("\n[Main] Initializing signal.csv file...")
-        initialize_signal_csv()
 
         # Step 4: Get timeframe for scheduling
         if result_dict:

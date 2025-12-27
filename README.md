@@ -68,12 +68,16 @@ python3 main.py
   - Volume Moving Average
 - **Delta-Based Option Selection**: Automatically selects options with maximum delta for optimal entry
 - **Pyramiding System**: Adds positions when price moves favorably by specified distance
+- **Dynamic Stop Loss System**: 
+  - Initial SL with ATR adjustment (Lowest Low/Highest High ± ATR × Multiplier)
+  - Dynamic SL updates after pyramiding (average of entry prices)
+- **Dual Exit Mechanisms**: Stop Loss exit and Supertrend exit (independent triggers)
 - **Re-entry Logic**: Can re-enter trades after exit if armed state is still active
 - **State Persistence**: Saves trading state to `state.json` for recovery after restart
 - **Auto-Login**: Automatic login at 9:00 AM daily
 - **Rate Limit Handling**: Automatically handles "too many requests" errors with re-login
 - **Candle-Based Execution**: Runs at precise candle boundaries (e.g., 14:30, 14:35, 14:40 for 5-minute timeframe)
-- **Comprehensive Logging**: All trading events logged to `OrderLog.txt` and `signal.csv`
+- **Comprehensive Logging**: All trading events logged to `OrderLog.txt` and `signal.csv` with detailed P&L tracking
 
 ## 📊 Trading Strategy
 
@@ -102,9 +106,10 @@ The bot implements a **Keltner Channel Reversal Strategy with Pyramiding** that 
    - **Armed state remains active** after entry (allows re-entry after exit)
 
 3. **Buy Exit**:
-   - Supertrend changes from GREEN (trend=1, uptrend) to RED (trend=-1, downtrend)
+   - **Supertrend Exit**: Supertrend changes from GREEN (trend=1, uptrend) to RED (trend=-1, downtrend)
+   - **Stop Loss Exit**: Previous candle HA_Low < Current Stop Loss (see Stop Loss Management section)
    - Evaluated on candle close
-   - Exit the BUY position
+   - Exit the BUY position (all pyramiding positions exit together)
    - After exit, immediately check if armed SELL and entry conditions on same candle
 
 4. **Armed Buy Reset**:
@@ -129,9 +134,10 @@ The bot implements a **Keltner Channel Reversal Strategy with Pyramiding** that 
    - **Armed state remains active** after entry (allows re-entry after exit)
 
 3. **Sell Exit**:
-   - Supertrend changes from RED (trend=-1, downtrend) to GREEN (trend=1, uptrend)
+   - **Supertrend Exit**: Supertrend changes from RED (trend=-1, downtrend) to GREEN (trend=1, uptrend)
+   - **Stop Loss Exit**: Previous candle HA_High > Current Stop Loss (see Stop Loss Management section)
    - Evaluated on candle close
-   - Exit the SELL position
+   - Exit the SELL position (all pyramiding positions exit together)
    - After exit, immediately check if armed BUY/SELL and entry conditions on same candle
 
 4. **Armed Sell Reset**:
@@ -159,6 +165,108 @@ The bot implements a **Keltner Channel Reversal Strategy with Pyramiding** that 
 3. SELL entry conditions are met (HA close < KC2_upper, volume > MA) → **BUT NO TRADE** (silently blocked, no log)
 4. BUY position exits (Supertrend changes from GREEN to RED) → **All pyramiding positions exit together**
 5. **Same candle**: Check if armed SELL → If HA close < KC2_upper AND volume > MA → **SELL trade is taken** (PUT option)
+
+### Stop Loss Management
+
+The bot implements a dynamic stop-loss system with ATR adjustment that protects positions and adjusts as pyramiding positions are added.
+
+#### Initial Stop Loss Calculation (ATR-Based)
+
+**At Entry (BUY Position):**
+1. Get last 5 candles (excluding current entry candle)
+2. Find: **Lowest HA_Low** of last 5 candles
+3. Calculate ATR:
+   - Period: `SLATR` from TradeSettings.csv (e.g., 14)
+   - Method: Using `pandas_ta.atr()` on Heikin-Ashi data (same as Keltner Channel)
+   - Uses full historical dataframe for accurate ATR calculation
+4. Calculate ATR Adjustment:
+   - ATR Adjustment = ATR × `SLMULTIPLIER` (e.g., ATR 5 × Multiplier 2 = 10)
+5. Calculate Initial SL:
+   - **Initial SL = Lowest Low - ATR Adjustment**
+   - Example: Lowest Low = 100, ATR = 5, Multiplier = 2 → SL = 100 - (5 × 2) = 90
+6. Store: `initial_sl = 90`, `current_sl = 90` (initially both are the same)
+
+**At Entry (SELL Position):**
+1. Get last 5 candles (excluding current entry candle)
+2. Find: **Highest HA_High** of last 5 candles
+3. Calculate ATR (same method as BUY)
+4. Calculate ATR Adjustment: ATR × `SLMULTIPLIER`
+5. Calculate Initial SL:
+   - **Initial SL = Highest High + ATR Adjustment**
+   - Example: Highest High = 100, ATR = 5, Multiplier = 2 → SL = 100 + (5 × 2) = 110
+6. Store: `initial_sl = 110`, `current_sl = 110`
+
+**Fallback Behavior:**
+- If ATR calculation fails, falls back to simple lowest low/highest high (without ATR adjustment)
+- Error is logged and position still proceeds with fallback SL
+
+#### Dynamic Stop Loss Update (After Pyramiding)
+
+When a pyramiding position is added:
+1. **Track Entry Prices**: All entry prices (HA_Close) are stored in `entry_prices` list
+   - Example: [100, 125, 150] for 3 positions
+
+2. **Recalculate SL**: New SL = **Average of all entry prices** (NO ATR adjustment)
+   - Example: (100 + 125 + 150) / 3 = 125
+   - The SL becomes the average entry price itself
+   - **Note**: ATR is only used for initial SL, not for pyramiding updates
+
+3. **Update Current SL**: `current_sl` is updated to the new average
+   - `initial_sl` remains unchanged (still the original ATR-based SL)
+   - This happens after each pyramiding trade
+
+**Example Flow:**
+- **Entry 1** at 100: 
+  - Lowest Low = 95, ATR = 5, Multiplier = 2
+  - Initial SL = 95 - (5 × 2) = 85
+  - Current SL = 85
+- **Pyramiding 1** at 125: 
+  - Entry prices = [100, 125]
+  - Current SL = (100 + 125) / 2 = 112.5 (updated, no ATR)
+  - Initial SL = 85 (unchanged)
+- **Pyramiding 2** at 150: 
+  - Entry prices = [100, 125, 150]
+  - Current SL = (100 + 125 + 150) / 3 = 125 (updated, no ATR)
+  - Initial SL = 85 (unchanged)
+
+#### Stop Loss Exit Conditions
+
+**BUY Position:**
+- Exit when: **Previous candle HA_Low < Current SL**
+- All positions (initial + pyramiding) exit together via combined order
+- Each position logged individually to CSV with P&L
+
+**SELL Position:**
+- Exit when: **Previous candle HA_High > Current SL**
+- All positions (initial + pyramiding) exit together via combined order
+- Each position logged individually to CSV with P&L
+
+**Exit Execution:**
+- Combined order placed for all positions (single SELL order)
+- Individual CSV logs for each position:
+  - Initial position: `buyexit` or `sellexit`
+  - Pyramiding positions: `pyramiding trade buy (1) exit`, `pyramiding trade buy (2) exit`, etc.
+- Each exit log includes: Entry/Exit prices, Points Captured, P&L (Abs.), P&L (%)
+
+#### Stop Loss vs Supertrend Exit
+
+- **Two Independent Exit Mechanisms**: Both work separately
+- **Supertrend Exit**: Based on trend reversal (GREEN ↔ RED)
+- **Stop Loss Exit**: Based on price hitting the calculated SL level
+- **Either Can Trigger**: First one to hit will exit all positions
+- **Same Exit Behavior**: Both use combined orders, individual CSV logging, same state reset
+- **Priority**: SL exit is checked before Supertrend exit
+
+#### Stop Loss State Management
+
+**SL Fields in Trading State:**
+- `initial_sl`: The initial SL calculated at entry (ATR-based: Lowest Low/Highest High ± ATR × Multiplier)
+- `current_sl`: The current SL (updated after each pyramiding trade = average of entry prices)
+- `entry_prices`: List of all entry prices [100, 125, 150, ...] for averaging
+
+**SL Reset:**
+- Reset to `None` when position exits (via Supertrend or SL)
+- Recalculated on next entry using the same ATR-based logic
 
 ### Pyramiding System
 
@@ -542,28 +650,30 @@ zerodha2fa,J25T6D7R7RQ2CIFJZ6IGTPPVR2SHO52W
 Configure your trading symbols and indicator parameters:
 
 ```csv
-Symbol,Expiery,Timeframe,StrikeStep,StrikeNumber,Lotsize,VolumeMa,SupertrendPeriod,SupertrendMul,KC1_Length,KC1_Mul,KC1_ATR,KC2_Length,KC2_Mul,KC2_ATR,PyramidingDistance,PyramidingNumber
-CRUDEOIL,25-12-2025,minute,50,6,1,29,10,3,50,3.75,12,50,2.75,14,50,2
+Symbol,Expiery,Timeframe,StrikeStep,StrikeNumber,Lotsize,VolumeMa,SupertrendPeriod,SupertrendMul,KC1_Length,KC1_Mul,KC1_ATR,KC2_Length,KC2_Mul,KC2_ATR,PyramidingDistance,PyramidingNumber,SLATR,SLMULTIPLIER
+CRUDEOIL,25-12-2025,5minute,100,3,1,29,10,3,50,3.75,12,50,2.75,14,50,2,14,2
 ```
 
 **Column Descriptions:**
 - `Symbol`: Base symbol (e.g., CRUDEOIL)
 - `Expiery`: Expiry date in DD-MM-YYYY format
 - `Timeframe`: Candle timeframe (e.g., 5minute, 15minute, 1hour)
-- `StrikeStep`: Strike step for options (e.g., 50) - used for strike normalization
-- `StrikeNumber`: Number of strikes on each side of ATM (e.g., 6) - used for strike list creation
+- `StrikeStep`: Strike step for options (e.g., 100) - used for strike normalization
+- `StrikeNumber`: Number of strikes on each side of ATM (e.g., 3) - used for strike list creation
 - `Lotsize`: Lot size for trading (quantity per position)
 - `VolumeMa`: Volume Moving Average period (default: 29)
 - `SupertrendPeriod`: Supertrend ATR period (default: 10)
 - `SupertrendMul`: Supertrend multiplier (default: 3.0)
 - `KC1_Length`: Keltner Channel 1 EMA length (default: 50)
-- `KC1_Mul`: Keltner Channel 1 multiplier (default: 2.0)
-- `KC1_ATR`: Keltner Channel 1 ATR period (default: 14)
+- `KC1_Mul`: Keltner Channel 1 multiplier (default: 3.75)
+- `KC1_ATR`: Keltner Channel 1 ATR period (default: 12)
 - `KC2_Length`: Keltner Channel 2 EMA length (default: 50)
-- `KC2_Mul`: Keltner Channel 2 multiplier (default: 2.0)
-- `KC2_ATR`: Keltner Channel 2 ATR period (default: 12)
+- `KC2_Mul`: Keltner Channel 2 multiplier (default: 2.75)
+- `KC2_ATR`: Keltner Channel 2 ATR period (default: 14)
 - `PyramidingDistance`: Price movement required to add pyramiding position (e.g., 50)
 - `PyramidingNumber`: Maximum number of additional pyramiding positions (e.g., 2 = max 3 total positions: 1 initial + 2 pyramiding)
+- `SLATR`: ATR period for initial stop loss calculation (e.g., 14)
+- `SLMULTIPLIER`: Multiplier for ATR in initial stop loss calculation (e.g., 2.0)
 
 ## 🎯 Usage
 
@@ -742,8 +852,12 @@ Check Armed SELL → If entry conditions met → SELL Entry (same candle)
 
 | Signal | Condition |
 |--------|-----------|
-| **BUY Exit** | Supertrend: GREEN → RED |
-| **SELL Exit** | Supertrend: RED → GREEN |
+| **BUY Exit (Supertrend)** | Supertrend changes from GREEN (trend=1) to RED (trend=-1) |
+| **BUY Exit (Stop Loss)** | Previous candle HA_Low < Current Stop Loss |
+| **SELL Exit (Supertrend)** | Supertrend changes from RED (trend=-1) to GREEN (trend=1) |
+| **SELL Exit (Stop Loss)** | Previous candle HA_High > Current Stop Loss |
+
+**Note**: Both exit mechanisms work independently. Either one can trigger an exit. Stop Loss exit is checked before Supertrend exit. All positions (initial + pyramiding) exit together via combined order, but each position is logged individually to CSV with separate P&L calculations.
 
 ### Armed Conditions
 
@@ -771,11 +885,27 @@ The bot automatically saves trading state to `state.json` after:
 - Armed status (armed_buy, armed_sell) - persists after entry
 - Exit flags
 - Last exit candle date
+- Option information:
+  - `option_symbol`: Current option contract symbol
+  - `option_exchange`: Exchange (NFO/MCX)
+  - `option_order_id`: Order ID for tracking
+  - `entry_option_price`: Option price at initial entry (for P&L calculation)
+- Pyramiding fields:
+  - `pyramiding_count`: Total number of positions (initial + pyramiding)
+  - `first_entry_price`: Future price at initial entry
+  - `last_pyramiding_price`: Future price at last pyramiding entry
+  - `pyramiding_positions`: List of pyramiding position data (entry prices, option prices)
+- Stop Loss fields:
+  - `initial_sl`: Initial SL calculated at entry (ATR-based: Lowest Low/Highest High ± ATR × Multiplier)
+  - `current_sl`: Current SL (updated after pyramiding = average of entry prices)
+  - `entry_prices`: List of all entry prices (HA_Close) for averaging
 
 **On restart**, the bot automatically loads the previous state, so it knows:
 - Which positions are currently open
 - Which symbols are armed (can re-enter if conditions met)
 - Previous exit information
+- Current stop loss levels for each position
+- All entry prices for SL recalculation
 
 **Re-entry Behavior**:
 - If a position exits via Supertrend and armed state is still active
@@ -812,11 +942,14 @@ All trading events are logged to `OrderLog.txt` with timestamps:
 - **ARMED BUY/SELL**: When armed conditions are met
 - **ARMED RESET**: When armed conditions are reset (opposite condition)
 - **BUY/SELL ENTRY**: When positions are entered (includes selected option details with delta)
+- **INITIAL SL CALCULATED**: When initial stop loss is calculated at entry (includes calculation details: Lowest Low/Highest High, ATR, multiplier, final SL value)
+- **SL UPDATED AFTER PYRAMIDING**: When stop loss is recalculated after pyramiding (includes old and new SL values)
+- **SL EXIT ORDER PLACED**: When stop loss exit is triggered (includes SL value, previous candle HA_Low/HA_High, exit price)
 - **PYRAMIDING TRADE OPENED**: When pyramiding position is added (includes position number, price movement, pyramiding level)
 - **PYRAMIDING ORDER FAILED**: When pyramiding order fails
 - **PYRAMIDING EXIT TRIGGERED**: When exit signal occurs (includes all positions being exited)
 - **PYRAMIDING RESET CONFIRMED**: When pyramiding state is reset after exit
-- **EXIT BUY/SELL**: When positions are exited (includes P&L for each position)
+- **EXIT BUY/SELL**: When positions are exited via Supertrend (includes P&L for each position)
 - **DELTA CALCULATION**: Detailed table showing all strike deltas, IV (with source), and selected option
 - **BUY/SELL ENTRY BLOCKED**: When entry conditions are met but blocked due to existing position
 - **ERRORS**: Any errors or re-login events
@@ -855,33 +988,51 @@ When a signal is triggered, the bot prints a detailed table showing:
 All trade signals are logged to `signal.csv` in structured format for easy analysis:
 
 **CSV Columns:**
-- `timestamp`: Date and time of the trade signal
-- `Action`: Trade action type:
+- `timestamp`: Date and time in DD-MM-YYYY HH:MM format
+- `action`: Trade action type (lowercase):
+  - `Armed Buy`: Armed buy condition triggered
+  - `Armed Sell`: Armed sell condition triggered
   - `buy`: Initial BUY entry
   - `sell`: Initial SELL entry
-  - `pyramiding trade buy`: Pyramiding BUY position addition
-  - `pyramiding trade sell`: Pyramiding SELL position addition
-  - `buyexit`: BUY position exit (all positions together)
-  - `sellexit`: SELL position exit (all positions together)
-- `OptionPrice`: Option price at entry/exit
-- `OptionContract`: Option symbol (e.g., CRUDEOIL25DEC5100CE)
-- `FutureContract`: Future symbol (e.g., CRUDEOIL25DECFUT)
-- `Future price`: Future price (HA close) at entry/exit
-- `Lotsize`: Quantity (for exits, this is total quantity of all positions)
+  - `pyramiding trade buy (1)`: First pyramiding BUY position
+  - `pyramiding trade buy (2)`: Second pyramiding BUY position
+  - `pyramiding trade sell (1)`: First pyramiding SELL position
+  - `buyexit`: Initial BUY position exit
+  - `sellexit`: Initial SELL position exit
+  - `pyramiding trade buy (1) exit`: First pyramiding BUY exit
+  - `pyramiding trade buy (2) exit`: Second pyramiding BUY exit
+  - `pyramiding trade sell (1) exit`: First pyramiding SELL exit
+- `optionprice`: Option price at entry/exit (1 decimal place)
+- `optioncontract`: Option symbol (e.g., CRUDEOIL25DEC5100CE)
+- `futurecontract`: Future symbol (e.g., CRUDEOIL25DECFUT)
+- `futureprice`: Future price (HA close) at entry/exit (2 decimal places)
+- `lotsize`: Quantity per position
+- `Stop loss`: Stop loss value (empty for entries, value for exits)
+- `Margin`: OptionPrice × Lotsize × 100 (only for entries, empty for exits)
+- `Points Captured`: Future price movement (only for exits)
+  - BUY: Exit Future Price - Entry Future Price
+  - SELL: Entry Future Price - Exit Future Price
+- `Charges`: Brokerage/charges (63, only for exits)
+- `P&L (Abs.)`: Absolute P&L in rupees (only for exits)
+  - Formula: (P&L per unit × Lotsize × 100) - Charges
+- `P&L (%)`: Percentage P&L (only for exits)
+  - Formula: (P&L (Abs.) / Entry Margin) × 100
 
 **CSV Logging Behavior**:
 - **Always logs**: CSV logging occurs regardless of order success/failure
-- **Missing data**: If option symbol or price is unavailable, logs "N/A" or 0
-- **Pyramiding entries**: Each pyramiding position is logged separately
-- **Exits**: Single log entry for all positions exiting together (total lotsize shown)
+- **Individual exits**: Each position (initial + pyramiding) logged separately on exit
+- **Missing data**: If option symbol or price is unavailable, logs empty string
+- **Armed states**: Logged when armed conditions are set
+- **Pyramiding entries**: Each pyramiding position logged with position number
 
 **Example CSV Entries:**
 ```csv
-timestamp,Action,OptionPrice,OptionContract,FutureContract,Future price,Lotsize
-2025-11-28 19:39:13,buy,266.00,CRUDEOIL25DEC5100CE,CRUDEOIL25DECFUT,5281.00,1
-2025-11-28 19:44:13,pyramiding trade buy,280.00,CRUDEOIL25DEC5100CE,CRUDEOIL25DECFUT,5331.00,1
-2025-11-28 19:49:13,pyramiding trade buy,295.00,CRUDEOIL25DEC5100CE,CRUDEOIL25DECFUT,5381.00,1
-2025-11-28 19:54:13,buyexit,310.00,CRUDEOIL25DEC5100CE,CRUDEOIL25DECFUT,5431.00,3
+timestamp,action,optionprice,optioncontract,futurecontract,futureprice,lotsize,Stop loss,Margin,Points Captured,Charges,P&L (Abs.),P&L (%)
+04-12-2025 20:05,Armed Buy,,,,,,,,,,,
+04-12-2025 20:55,buy,191.1,CRUDEOIL25DEC5200CE,CRUDEOIL25DECFUT,5326.75,1,,19110,,,,,
+04-12-2025 22:05,pyramiding trade buy (1),238.3,CRUDEOIL25DEC5200CE,CRUDEOIL25DECFUT,5379.5,1,,23830,,,,,
+05-12-2025 17:40,buyexit,210.3,CRUDEOIL25DEC5200CE,CRUDEOIL25DECFUT,5363.5,1,, ,19.2,63,1857,10%
+05-12-2025 17:40,pyramiding trade buy (1) exit,210.3,CRUDEOIL25DEC5200CE,CRUDEOIL25DECFUT,5363.5,1,,,-28,63,-2863,-12%
 ```
 
 ## ⚠️ Important Notes

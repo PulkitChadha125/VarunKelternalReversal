@@ -440,7 +440,7 @@ def convert_to_heikin_ashi(df: pl.DataFrame) -> pl.DataFrame:
 
 def calculate_keltner_channel(df: pl.DataFrame, length: int, multiplier: float, atr_period: int, prefix: str = "KC") -> pl.DataFrame:
     """
-    Calculate Keltner Channel on Heikin-Ashi data.
+    Calculate Keltner Channel on Heikin-Ashi data using pandas_ta.
     
     Keltner Channel:
     - Middle Line = EMA(HA_Close, length) - Exponential Moving Average of Heikin-Ashi Close
@@ -458,57 +458,99 @@ def calculate_keltner_channel(df: pl.DataFrame, length: int, multiplier: float, 
         Polars DataFrame with Keltner Channel columns added
     """
     try:
-        # Calculate ATR on Heikin-Ashi data using polars_talib
-        # polars_talib API: pl.col("close").ta.atr(pl.col("high"), pl.col("low"), timeperiod=14)
+        # Convert Polars DataFrame to Pandas for pandas_ta
+        df_pd = df.to_pandas()
+        
+        # Ensure we have the required Heikin-Ashi columns
+        if not all(col in df_pd.columns for col in ['ha_high', 'ha_low', 'ha_close']):
+            raise ValueError("DataFrame must contain ha_high, ha_low, and ha_close columns")
+        
+        # Calculate Keltner Channel using pandas_ta
+        # pandas_ta.kc returns a DataFrame with columns:
+        # - KCLe_{length}_{scalar}: Lower band
+        # - KCBe_{length}_{scalar}: Base/Middle band (EMA)
+        # - KCUe_{length}_{scalar}: Upper band
         try:
-            df = df.with_columns([
-                pl.col("ha_close").ta.atr(pl.col("ha_high"), pl.col("ha_low"), timeperiod=atr_period).alias(f"ATR_{atr_period}")
-            ])
-        except (AttributeError, TypeError) as e:
-            # Fallback: use Polars native implementation if ta.atr doesn't work
-            print(f"[KC] Using fallback ATR calculation: {str(e)}")
-            df = df.with_columns([
-                (pl.col("ha_high") - pl.col("ha_low")).abs().alias("tr1"),
-                (pl.col("ha_high") - pl.col("ha_close").shift(1)).abs().alias("tr2"),
-                (pl.col("ha_low") - pl.col("ha_close").shift(1)).abs().alias("tr3")
-            ])
-            df = df.with_columns([
-                pl.max_horizontal([pl.col("tr1"), pl.col("tr2"), pl.col("tr3")]).alias("tr")
-            ])
-            df = df.with_columns([
-                pl.col("tr").rolling_mean(window_size=atr_period).alias(f"ATR_{atr_period}")
-            ])
-            df = df.drop(["tr1", "tr2", "tr3", "tr"])
+            # Try with atr_length parameter if supported
+            kc_result = ta.kc(
+                high=df_pd['ha_high'],
+                low=df_pd['ha_low'],
+                close=df_pd['ha_close'],
+                length=length,
+                scalar=multiplier,
+                mamode="ema",
+                atr_length=atr_period  # Use separate ATR period if supported
+            )
+        except TypeError:
+            # Fallback: pandas_ta.kc() might not support atr_length parameter
+            # In this case, it will use the same 'length' for both EMA and ATR
+            kc_result = ta.kc(
+                high=df_pd['ha_high'],
+                low=df_pd['ha_low'],
+                close=df_pd['ha_close'],
+                length=length,
+                scalar=multiplier,
+                mamode="ema"
+            )
         
-        atr_col = f"ATR_{atr_period}"
+        if kc_result is None or len(kc_result.columns) == 0:
+            raise ValueError("pandas_ta.kc() returned None or empty result")
         
-        # Calculate EMA for middle line using polars_talib
-        # polars_talib API: pl.col("close").ta.ema(timeperiod=30)
-        try:
-            df = df.with_columns([
-                pl.col("ha_close").ta.ema(timeperiod=length).alias(f"EMA_{length}")
-            ])
-        except (AttributeError, TypeError) as e:
-            # Fallback: use Polars native EMA implementation
-            print(f"[KC] Using fallback EMA calculation: {str(e)}")
-            alpha = 2.0 / (length + 1.0)
-            df = df.with_columns([
-                pl.col("ha_close").ewm_mean(alpha=alpha, adjust=False).alias(f"EMA_{length}")
-            ])
+        # Build column name patterns based on length and multiplier
+        # pandas_ta formats multiplier as float (e.g., "2.75"), but we'll try both formats
+        col_suffix_int = f"{length}_{int(multiplier)}"
+        col_suffix_float = f"{length}_{multiplier}"
         
-        ema_col = f"EMA_{length}"
+        # Try to find columns with expected names
+        kc_cols = [col for col in kc_result.columns if col.startswith('KC')]
         
-        # Calculate Keltner Channel bands
-        df = df.with_columns([
-            pl.col(ema_col).alias(f"{prefix}_middle"),
-            (pl.col(ema_col) + (pl.col(atr_col) * multiplier)).alias(f"{prefix}_upper"),
-            (pl.col(ema_col) - (pl.col(atr_col) * multiplier)).alias(f"{prefix}_lower")
-        ])
+        if len(kc_cols) < 3:
+            raise ValueError(f"Expected at least 3 Keltner Channel columns, found {len(kc_cols)}: {kc_cols}")
         
-        return df
+        # Find columns by pattern (KCLe, KCBe, KCUe)
+        # pandas_ta.kc() returns: KCLe_{length}_{scalar} (Lower), KCBe_{length}_{scalar} (Base/Middle), KCUe_{length}_{scalar} (Upper)
+        kc_lower_col = None
+        kc_middle_col = None
+        kc_upper_col = None
+        
+        for col in kc_cols:
+            if col.startswith('KCLe_'):
+                kc_lower_col = col
+            elif col.startswith('KCBe_'):
+                kc_middle_col = col
+            elif col.startswith('KCUe_'):
+                kc_upper_col = col
+        
+        # Fallback: use sorted order if pattern matching didn't work
+        # Note: When sorted, KCBe comes first, KCLe second, KCUe third
+        if not all([kc_lower_col, kc_middle_col, kc_upper_col]):
+            kc_cols_sorted = sorted(kc_cols)
+            if len(kc_cols_sorted) >= 3:
+                # Sorted order: KCBe_* (Base/Middle), KCLe_* (Lower), KCUe_* (Upper)
+                kc_middle_col = kc_cols_sorted[0]  # KCBe_* (Base/Middle)
+                kc_lower_col = kc_cols_sorted[1]  # KCLe_* (Lower)
+                kc_upper_col = kc_cols_sorted[2]   # KCUe_* (Upper)
+            else:
+                raise ValueError(f"Could not identify Keltner Channel columns. Found: {kc_cols}")
+        
+        # Add Keltner Channel columns to the pandas DataFrame with expected names
+        df_pd[f"{prefix}_lower"] = kc_result[kc_lower_col]
+        df_pd[f"{prefix}_middle"] = kc_result[kc_middle_col]
+        df_pd[f"{prefix}_upper"] = kc_result[kc_upper_col]
+        
+        # Convert back to Polars DataFrame
+        df_result = pl.from_pandas(df_pd)
+        
+        # Ensure all required columns exist (fill with None if missing)
+        required_cols = [f"{prefix}_upper", f"{prefix}_lower", f"{prefix}_middle"]
+        for col in required_cols:
+            if col not in df_result.columns:
+                df_result = df_result.with_columns([pl.lit(None).alias(col)])
+        
+        return df_result
         
     except Exception as e:
-        raise Exception(f"Error calculating Keltner Channel: {str(e)}")
+        raise Exception(f"Error calculating Keltner Channel with pandas_ta: {str(e)}")
 
 
 def calculate_supertrend(df: pl.DataFrame, period: int, multiplier: float) -> pl.DataFrame:
