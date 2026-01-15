@@ -1,0 +1,2 @@
+{"level":"ERROR","location":"[get_call:146] fyersModel","message":{"API":"/history","Error":{"code":-300,"message":"Invalid symbol provided","s":"error"}},"timestamp":"2026-01-13 15:27:00,297+0530","service":"FyersAPI"}
+{"level":"ERROR","location":"[get_call:164] fyersModel","message":{"API":"/history","error":"Expecting value: line 1 column 1 (char 0)"},"timestamp":"2026-01-13 19:15:00,533+0530","service":"FyersAPI"}

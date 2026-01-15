@@ -1957,7 +1957,7 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
             # BUY Position SL Exit: Previous candle HA_Low < SL
             if current_position == 'BUY' and current_sl is not None and prev_ha_low is not None:
                 if prev_ha_low < current_sl:
-                    # SL hit - exit all positions using SEPARATE orders for each position
+                    # SL hit - exit all positions
                     option_symbol = trading_state.get('option_symbol', None)
                     option_exchange = trading_state.get('option_exchange', None)
                     pyramiding_positions = trading_state.get('pyramiding_positions', [])
@@ -1966,82 +1966,49 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                     params = result_dict.get(unique_key, {})
                     lotsize = int(params.get('Lotsize', 1))
                     
-                    # Get entry option price for initial position
-                    entry_option_price_initial = trading_state.get('entry_option_price', None)
+                    # Calculate total quantity (initial + all pyramiding positions)
+                    total_lotsize = lotsize * pyramiding_count if pyramiding_count > 0 else lotsize
                     
-                    # Exit initial position with separate order
-                    initial_exit_order_id = None
-                    initial_exit_price = None
+                    # Exit all positions with ONE combined order
+                    combined_exit_order_id = None
+                    exit_price = None
                     if option_symbol and option_exchange and kite_client:
                         try:
                             quote = get_option_quote(kite_client, option_exchange, option_symbol)
                             option_ltp = quote.get('last_price', None)
                             if option_ltp is not None:
                                 option_ltp = float(option_ltp)
-                                initial_exit_price = option_ltp
-                                # Place separate order for initial position
+                                exit_price = option_ltp
+                                # Place ONE combined order for all positions
                                 exit_order = place_option_order(
                                     kite=kite_client,
                                     exchange=option_exchange,
                                     option_symbol=option_symbol,
                                     transaction_type="SELL",
-                                    quantity=lotsize,  # Individual quantity, not combined
+                                    quantity=total_lotsize,  # Combined quantity
                                     order_type="LIMIT",
                                     product="NRML",
                                     price=option_ltp
                                 )
-                                initial_exit_order_id = exit_order.get('order_id', None) if exit_order else None
-                                write_to_order_logs(f"SL EXIT ORDER PLACED: SELL {option_symbol} (Initial Position) | Order ID: {initial_exit_order_id if initial_exit_order_id else 'N/A'} | Quantity: {lotsize} | Exit Price: {initial_exit_price:.2f} | SL: {current_sl:.2f} | Prev HA_Low: {prev_ha_low:.2f}")
+                                combined_exit_order_id = exit_order.get('order_id', None) if exit_order else None
+                                write_to_order_logs(f"SL EXIT ORDER PLACED: SELL {option_symbol} (All Positions Combined) | Order ID: {combined_exit_order_id if combined_exit_order_id else 'N/A'} | Total Quantity: {total_lotsize} | Exit Price: {exit_price:.2f} | SL: {current_sl:.2f} | Prev HA_Low: {prev_ha_low:.2f}")
                         except Exception as e:
-                            print(f"[SL Exit] Error placing initial exit order: {str(e)}")
-                            write_to_order_logs(f"SL EXIT ORDER ERROR: SELL {option_symbol} (Initial Position) | Error: {str(e)}")
+                            print(f"[SL Exit] Error placing exit order: {str(e)}")
+                            write_to_order_logs(f"SL EXIT ORDER ERROR: SELL {option_symbol} (All Positions) | Error: {str(e)}")
                             traceback.print_exc()
                     
-                    # Exit each pyramiding position with separate order (different strikes may have different symbols)
-                    pyramiding_exit_orders = []
-                    for idx, pos in enumerate(pyramiding_positions, start=1):
-                        pyr_option_symbol = pos.get('option_symbol', None)
-                        if not pyr_option_symbol:
-                            pyr_option_symbol = option_symbol  # Fallback to initial if not stored
-                        
-                        pyr_exit_order_id = None
-                        pyr_exit_price = None
-                        if pyr_option_symbol and option_exchange and kite_client:
-                            try:
-                                quote = get_option_quote(kite_client, option_exchange, pyr_option_symbol)
-                                option_ltp = quote.get('last_price', None)
-                                if option_ltp is not None:
-                                    option_ltp = float(option_ltp)
-                                    pyr_exit_price = option_ltp
-                                    # Place separate order for this pyramiding position
-                                    exit_order = place_option_order(
-                                        kite=kite_client,
-                                        exchange=option_exchange,
-                                        option_symbol=pyr_option_symbol,
-                                        transaction_type="SELL",
-                                        quantity=lotsize,  # Individual quantity
-                                        order_type="LIMIT",
-                                        product="NRML",
-                                        price=option_ltp
-                                    )
-                                    pyr_exit_order_id = exit_order.get('order_id', None) if exit_order else None
-                                    write_to_order_logs(f"SL EXIT ORDER PLACED: SELL {pyr_option_symbol} (Pyramiding Position #{idx}) | Order ID: {pyr_exit_order_id if pyr_exit_order_id else 'N/A'} | Quantity: {lotsize} | Exit Price: {pyr_exit_price:.2f} | SL: {current_sl:.2f} | Prev HA_Low: {prev_ha_low:.2f}")
-                                    pyramiding_exit_orders.append({
-                                        'position_num': idx,
-                                        'option_symbol': pyr_option_symbol,
-                                        'order_id': pyr_exit_order_id,
-                                        'exit_price': pyr_exit_price
-                                    })
-                            except Exception as e:
-                                print(f"[SL Exit] Error placing pyramiding exit order #{idx}: {str(e)}")
-                                write_to_order_logs(f"SL EXIT ORDER ERROR: SELL {pyr_option_symbol} (Pyramiding Position #{idx}) | Error: {str(e)}")
-                                traceback.print_exc()
+                    # Get entry option price for initial position
+                    entry_option_price_initial = trading_state.get('entry_option_price', None)
                     
-                    # Log initial position exit to CSV
-                    if first_entry_price is not None and initial_exit_price is not None and entry_option_price_initial is not None:
+                    # Calculate P&L for each position and log individual exits
+                    exited_positions = []
+                    
+                    # Log initial position exit
+                    if first_entry_price is not None and exit_price is not None and entry_option_price_initial is not None:
+                        # Log initial position exit to CSV
                         write_to_signal_csv(
                             action='buyexit',
-                            option_price=initial_exit_price,
+                            option_price=exit_price,
                             option_contract=option_symbol if option_symbol else "N/A",
                             future_contract=future_symbol,
                             future_price=ha_close,
@@ -2051,35 +2018,17 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                             entry_option_price=entry_option_price_initial
                         )
                     
-                    # Log each pyramiding position exit to CSV (with their own exit prices)
+                    # Log each pyramiding position exit
                     for idx, pos in enumerate(pyramiding_positions, start=1):
                         entry_future_price = pos.get('entry_price', None)
                         entry_option_price_pyr = pos.get('entry_option_price', None)
-                        pyr_option_symbol = pos.get('option_symbol', option_symbol)
-                        
-                        # Find corresponding exit price from pyramiding_exit_orders
-                        pyr_exit_price = None
-                        for exit_order_info in pyramiding_exit_orders:
-                            if exit_order_info['position_num'] == idx:
-                                pyr_exit_price = exit_order_info.get('exit_price', None)
-                                break
-                        
-                        # If not found, try to get from quote
-                        if pyr_exit_price is None and pyr_option_symbol and option_exchange and kite_client:
-                            try:
-                                quote = get_option_quote(kite_client, option_exchange, pyr_option_symbol)
-                                option_ltp = quote.get('last_price', None)
-                                if option_ltp is not None:
-                                    pyr_exit_price = float(option_ltp)
-                            except Exception:
-                                pass
-                        
-                        if entry_future_price is not None and pyr_exit_price is not None and entry_option_price_pyr is not None:
+                        if entry_future_price is not None and exit_price is not None and entry_option_price_pyr is not None:
+                            # Log pyramiding position exit to CSV
                             action_name = f'pyramiding trade buy ({idx}) exit'
                             write_to_signal_csv(
                                 action=action_name,
-                                option_price=pyr_exit_price,
-                                option_contract=pyr_option_symbol,
+                                option_price=exit_price,
+                                option_contract=pos.get('option_symbol', option_symbol),
                                 future_contract=future_symbol,
                                 future_price=ha_close,
                                 lotsize=lotsize,
@@ -2096,42 +2045,27 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                     write_to_order_logs("-"*80)
                     
                     # Log initial position details
-                    if first_entry_price is not None and initial_exit_price is not None and entry_option_price_initial is not None:
-                        initial_pnl = initial_exit_price - entry_option_price_initial if entry_option_price_initial > 0 else 0
+                    if first_entry_price is not None and exit_price is not None and entry_option_price_initial is not None:
                         write_to_order_logs(f"Position #1 (Initial):")
                         write_to_order_logs(f"  Option: {option_symbol}")
                         write_to_order_logs(f"  Entry Future Price: {first_entry_price:.2f}")
                         write_to_order_logs(f"  Entry Option Price: {entry_option_price_initial:.2f}")
-                        write_to_order_logs(f"  Exit Option Price: {initial_exit_price:.2f}")
+                        write_to_order_logs(f"  Exit Option Price: {exit_price:.2f}")
                         write_to_order_logs(f"  Quantity: {lotsize}")
-                        write_to_order_logs(f"  P&L per unit: {initial_pnl:+.2f}")
-                        write_to_order_logs(f"  Order ID: {initial_exit_order_id if initial_exit_order_id else 'N/A'}")
+                        write_to_order_logs(f"  Order ID: {combined_exit_order_id if combined_exit_order_id else 'N/A'} (Combined Order)")
                     
                     # Log pyramiding positions details
                     for idx, pos in enumerate(pyramiding_positions, start=1):
                         entry_future_price = pos.get('entry_price', None)
                         entry_option_price_pyr = pos.get('entry_option_price', None)
-                        pyr_option_symbol = pos.get('option_symbol', option_symbol)
-                        
-                        # Find corresponding exit info
-                        pyr_exit_price = None
-                        pyr_exit_order_id = None
-                        for exit_order_info in pyramiding_exit_orders:
-                            if exit_order_info['position_num'] == idx:
-                                pyr_exit_price = exit_order_info.get('exit_price', None)
-                                pyr_exit_order_id = exit_order_info.get('order_id', None)
-                                break
-                        
-                        if entry_future_price is not None and pyr_exit_price is not None and entry_option_price_pyr is not None:
-                            pnl = pyr_exit_price - entry_option_price_pyr if entry_option_price_pyr > 0 else 0
+                        if entry_future_price is not None and exit_price is not None and entry_option_price_pyr is not None:
                             write_to_order_logs(f"Position #{idx + 1} (Pyramiding):")
-                            write_to_order_logs(f"  Option: {pyr_option_symbol}")
+                            write_to_order_logs(f"  Option: {pos.get('option_symbol', option_symbol)}")
                             write_to_order_logs(f"  Entry Future Price: {entry_future_price:.2f}")
                             write_to_order_logs(f"  Entry Option Price: {entry_option_price_pyr:.2f}")
-                            write_to_order_logs(f"  Exit Option Price: {pyr_exit_price:.2f}")
+                            write_to_order_logs(f"  Exit Option Price: {exit_price:.2f}")
                             write_to_order_logs(f"  Quantity: {lotsize}")
-                            write_to_order_logs(f"  P&L per unit: {pnl:+.2f}")
-                            write_to_order_logs(f"  Order ID: {pyr_exit_order_id if pyr_exit_order_id else 'N/A'}")
+                            write_to_order_logs(f"  Order ID: {combined_exit_order_id if combined_exit_order_id else 'N/A'} (Combined Order)")
                     
                     write_to_order_logs("-"*80)
                     write_to_order_logs(f"SL EXIT RESET CONFIRMED:")
@@ -2159,7 +2093,7 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
             # SELL Position SL Exit: Previous candle HA_High > SL
             elif current_position == 'SELL' and current_sl is not None and prev_ha_high is not None:
                 if prev_ha_high > current_sl:
-                    # SL hit - exit all positions using SEPARATE orders for each position
+                    # SL hit - exit all positions
                     option_symbol = trading_state.get('option_symbol', None)
                     option_exchange = trading_state.get('option_exchange', None)
                     pyramiding_positions = trading_state.get('pyramiding_positions', [])
@@ -2168,82 +2102,46 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                     params = result_dict.get(unique_key, {})
                     lotsize = int(params.get('Lotsize', 1))
                     
-                    # Get entry option price for initial position
-                    entry_option_price_initial = trading_state.get('entry_option_price', None)
+                    # Calculate total quantity (initial + all pyramiding positions)
+                    total_lotsize = lotsize * pyramiding_count if pyramiding_count > 0 else lotsize
                     
-                    # Exit initial position with separate order
-                    initial_exit_order_id = None
-                    initial_exit_price = None
+                    # Exit all positions with ONE combined order
+                    combined_exit_order_id = None
+                    exit_price = None
                     if option_symbol and option_exchange and kite_client:
                         try:
                             quote = get_option_quote(kite_client, option_exchange, option_symbol)
                             option_ltp = quote.get('last_price', None)
                             if option_ltp is not None:
                                 option_ltp = float(option_ltp)
-                                initial_exit_price = option_ltp
-                                # Place separate order for initial position
+                                exit_price = option_ltp
+                                # Place ONE combined order for all positions
                                 exit_order = place_option_order(
                                     kite=kite_client,
                                     exchange=option_exchange,
                                     option_symbol=option_symbol,
                                     transaction_type="SELL",
-                                    quantity=lotsize,  # Individual quantity, not combined
+                                    quantity=total_lotsize,  # Combined quantity
                                     order_type="LIMIT",
                                     product="NRML",
                                     price=option_ltp
                                 )
-                                initial_exit_order_id = exit_order.get('order_id', None) if exit_order else None
-                                write_to_order_logs(f"SL EXIT ORDER PLACED: SELL {option_symbol} (Initial Position) | Order ID: {initial_exit_order_id if initial_exit_order_id else 'N/A'} | Quantity: {lotsize} | Exit Price: {initial_exit_price:.2f} | SL: {current_sl:.2f} | Prev HA_High: {prev_ha_high:.2f}")
+                                combined_exit_order_id = exit_order.get('order_id', None) if exit_order else None
+                                write_to_order_logs(f"SL EXIT ORDER PLACED: SELL {option_symbol} (All Positions Combined) | Order ID: {combined_exit_order_id if combined_exit_order_id else 'N/A'} | Total Quantity: {total_lotsize} | Exit Price: {exit_price:.2f} | SL: {current_sl:.2f} | Prev HA_High: {prev_ha_high:.2f}")
                         except Exception as e:
-                            print(f"[SL Exit] Error placing initial exit order: {str(e)}")
-                            write_to_order_logs(f"SL EXIT ORDER ERROR: SELL {option_symbol} (Initial Position) | Error: {str(e)}")
+                            print(f"[SL Exit] Error placing exit order: {str(e)}")
+                            write_to_order_logs(f"SL EXIT ORDER ERROR: SELL {option_symbol} (All Positions) | Error: {str(e)}")
                             traceback.print_exc()
                     
-                    # Exit each pyramiding position with separate order (different strikes may have different symbols)
-                    pyramiding_exit_orders = []
-                    for idx, pos in enumerate(pyramiding_positions, start=1):
-                        pyr_option_symbol = pos.get('option_symbol', None)
-                        if not pyr_option_symbol:
-                            pyr_option_symbol = option_symbol  # Fallback to initial if not stored
-                        
-                        pyr_exit_order_id = None
-                        pyr_exit_price = None
-                        if pyr_option_symbol and option_exchange and kite_client:
-                            try:
-                                quote = get_option_quote(kite_client, option_exchange, pyr_option_symbol)
-                                option_ltp = quote.get('last_price', None)
-                                if option_ltp is not None:
-                                    option_ltp = float(option_ltp)
-                                    pyr_exit_price = option_ltp
-                                    # Place separate order for this pyramiding position
-                                    exit_order = place_option_order(
-                                        kite=kite_client,
-                                        exchange=option_exchange,
-                                        option_symbol=pyr_option_symbol,
-                                        transaction_type="SELL",
-                                        quantity=lotsize,  # Individual quantity
-                                        order_type="LIMIT",
-                                        product="NRML",
-                                        price=option_ltp
-                                    )
-                                    pyr_exit_order_id = exit_order.get('order_id', None) if exit_order else None
-                                    write_to_order_logs(f"SL EXIT ORDER PLACED: SELL {pyr_option_symbol} (Pyramiding Position #{idx}) | Order ID: {pyr_exit_order_id if pyr_exit_order_id else 'N/A'} | Quantity: {lotsize} | Exit Price: {pyr_exit_price:.2f} | SL: {current_sl:.2f} | Prev HA_High: {prev_ha_high:.2f}")
-                                    pyramiding_exit_orders.append({
-                                        'position_num': idx,
-                                        'option_symbol': pyr_option_symbol,
-                                        'order_id': pyr_exit_order_id,
-                                        'exit_price': pyr_exit_price
-                                    })
-                            except Exception as e:
-                                print(f"[SL Exit] Error placing pyramiding exit order #{idx}: {str(e)}")
-                                write_to_order_logs(f"SL EXIT ORDER ERROR: SELL {pyr_option_symbol} (Pyramiding Position #{idx}) | Error: {str(e)}")
-                                traceback.print_exc()
+                    # Get entry option price for initial position
+                    entry_option_price_initial = trading_state.get('entry_option_price', None)
                     
-                    # Log initial position exit to CSV
-                    if first_entry_price is not None and initial_exit_price is not None and entry_option_price_initial is not None:
+                    # Log initial position exit
+                    if first_entry_price is not None and exit_price is not None and entry_option_price_initial is not None:
+                        # Log initial position exit to CSV
                         write_to_signal_csv(
                             action='sellexit',
-                            option_price=initial_exit_price,
+                            option_price=exit_price,
                             option_contract=option_symbol if option_symbol else "N/A",
                             future_contract=future_symbol,
                             future_price=ha_close,
@@ -2253,35 +2151,17 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                             entry_option_price=entry_option_price_initial
                         )
                     
-                    # Log each pyramiding position exit to CSV (with their own exit prices)
+                    # Log each pyramiding position exit
                     for idx, pos in enumerate(pyramiding_positions, start=1):
                         entry_future_price = pos.get('entry_price', None)
                         entry_option_price_pyr = pos.get('entry_option_price', None)
-                        pyr_option_symbol = pos.get('option_symbol', option_symbol)
-                        
-                        # Find corresponding exit price from pyramiding_exit_orders
-                        pyr_exit_price = None
-                        for exit_order_info in pyramiding_exit_orders:
-                            if exit_order_info['position_num'] == idx:
-                                pyr_exit_price = exit_order_info.get('exit_price', None)
-                                break
-                        
-                        # If not found, try to get from quote
-                        if pyr_exit_price is None and pyr_option_symbol and option_exchange and kite_client:
-                            try:
-                                quote = get_option_quote(kite_client, option_exchange, pyr_option_symbol)
-                                option_ltp = quote.get('last_price', None)
-                                if option_ltp is not None:
-                                    pyr_exit_price = float(option_ltp)
-                            except Exception:
-                                pass
-                        
-                        if entry_future_price is not None and pyr_exit_price is not None and entry_option_price_pyr is not None:
+                        if entry_future_price is not None and exit_price is not None and entry_option_price_pyr is not None:
+                            # Log pyramiding position exit to CSV
                             action_name = f'pyramiding trade sell ({idx}) exit'
                             write_to_signal_csv(
                                 action=action_name,
-                                option_price=pyr_exit_price,
-                                option_contract=pyr_option_symbol,
+                                option_price=exit_price,
+                                option_contract=pos.get('option_symbol', option_symbol),
                                 future_contract=future_symbol,
                                 future_price=ha_close,
                                 lotsize=lotsize,
@@ -2298,42 +2178,27 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                     write_to_order_logs("-"*80)
                     
                     # Log initial position details
-                    if first_entry_price is not None and initial_exit_price is not None and entry_option_price_initial is not None:
-                        initial_pnl = entry_option_price_initial - initial_exit_price if entry_option_price_initial > 0 else 0  # SELL: entry - exit
+                    if first_entry_price is not None and exit_price is not None and entry_option_price_initial is not None:
                         write_to_order_logs(f"Position #1 (Initial):")
                         write_to_order_logs(f"  Option: {option_symbol}")
                         write_to_order_logs(f"  Entry Future Price: {first_entry_price:.2f}")
                         write_to_order_logs(f"  Entry Option Price: {entry_option_price_initial:.2f}")
-                        write_to_order_logs(f"  Exit Option Price: {initial_exit_price:.2f}")
+                        write_to_order_logs(f"  Exit Option Price: {exit_price:.2f}")
                         write_to_order_logs(f"  Quantity: {lotsize}")
-                        write_to_order_logs(f"  P&L per unit: {initial_pnl:+.2f}")
-                        write_to_order_logs(f"  Order ID: {initial_exit_order_id if initial_exit_order_id else 'N/A'}")
+                        write_to_order_logs(f"  Order ID: {combined_exit_order_id if combined_exit_order_id else 'N/A'} (Combined Order)")
                     
                     # Log pyramiding positions details
                     for idx, pos in enumerate(pyramiding_positions, start=1):
                         entry_future_price = pos.get('entry_price', None)
                         entry_option_price_pyr = pos.get('entry_option_price', None)
-                        pyr_option_symbol = pos.get('option_symbol', option_symbol)
-                        
-                        # Find corresponding exit info
-                        pyr_exit_price = None
-                        pyr_exit_order_id = None
-                        for exit_order_info in pyramiding_exit_orders:
-                            if exit_order_info['position_num'] == idx:
-                                pyr_exit_price = exit_order_info.get('exit_price', None)
-                                pyr_exit_order_id = exit_order_info.get('order_id', None)
-                                break
-                        
-                        if entry_future_price is not None and pyr_exit_price is not None and entry_option_price_pyr is not None:
-                            pnl = entry_option_price_pyr - pyr_exit_price if entry_option_price_pyr > 0 else 0  # SELL: entry - exit
+                        if entry_future_price is not None and exit_price is not None and entry_option_price_pyr is not None:
                             write_to_order_logs(f"Position #{idx + 1} (Pyramiding):")
-                            write_to_order_logs(f"  Option: {pyr_option_symbol}")
+                            write_to_order_logs(f"  Option: {pos.get('option_symbol', option_symbol)}")
                             write_to_order_logs(f"  Entry Future Price: {entry_future_price:.2f}")
                             write_to_order_logs(f"  Entry Option Price: {entry_option_price_pyr:.2f}")
-                            write_to_order_logs(f"  Exit Option Price: {pyr_exit_price:.2f}")
+                            write_to_order_logs(f"  Exit Option Price: {exit_price:.2f}")
                             write_to_order_logs(f"  Quantity: {lotsize}")
-                            write_to_order_logs(f"  P&L per unit: {pnl:+.2f}")
-                            write_to_order_logs(f"  Order ID: {pyr_exit_order_id if pyr_exit_order_id else 'N/A'}")
+                            write_to_order_logs(f"  Order ID: {combined_exit_order_id if combined_exit_order_id else 'N/A'} (Combined Order)")
                     
                     write_to_order_logs("-"*80)
                     write_to_order_logs(f"SL EXIT RESET CONFIRMED:")
@@ -2363,7 +2228,7 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
         if current_position == 'BUY':
             # Exit ONLY when SuperTrend flips from GREEN (1) to RED (-1)
             if prev_supertrend_trend is not None and prev_supertrend_trend == 1 and supertrend_trend == -1:
-                # Exit all pyramiding positions for BUY - using SEPARATE orders for each position
+                # Exit all pyramiding positions for BUY
                 option_symbol = trading_state.get('option_symbol', None)
                 option_exchange = trading_state.get('option_exchange', None)
                 pyramiding_positions = trading_state.get('pyramiding_positions', [])
@@ -2372,83 +2237,47 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                 params = result_dict.get(unique_key, {})
                 lotsize = int(params.get('Lotsize', 1))
                 
-                # Get entry option price for initial position
-                entry_option_price_initial = trading_state.get('entry_option_price', None)
-                current_sl = trading_state.get('current_sl', None)
+                # Calculate total quantity (initial + all pyramiding positions)
+                total_lotsize = lotsize * pyramiding_count if pyramiding_count > 0 else lotsize
                 
-                # Exit initial position with separate order
-                initial_exit_order_id = None
-                initial_exit_price = None
+                # Exit all positions with ONE combined order
+                combined_exit_order_id = None
+                exit_price = None
                 if option_symbol and option_exchange and kite_client:
                     try:
                         quote = get_option_quote(kite_client, option_exchange, option_symbol)
                         option_ltp = quote.get('last_price', None)
                         if option_ltp is not None:
                             option_ltp = float(option_ltp)
-                            initial_exit_price = option_ltp
-                            # Place separate order for initial position
+                            exit_price = option_ltp
+                            # Place ONE combined order for all positions
                             exit_order = place_option_order(
                                 kite=kite_client,
                                 exchange=option_exchange,
                                 option_symbol=option_symbol,
                                 transaction_type="SELL",
-                                quantity=lotsize,  # Individual quantity, not combined
+                                quantity=total_lotsize,  # Combined quantity
                                 order_type="LIMIT",
                                 product="NRML",
                                 price=option_ltp
                             )
-                            initial_exit_order_id = exit_order.get('order_id', None) if exit_order else None
-                            write_to_order_logs(f"EXIT ORDER PLACED: SELL {option_symbol} (Initial Position) | Order ID: {initial_exit_order_id if initial_exit_order_id else 'N/A'} | Quantity: {lotsize} | Exit Price: {initial_exit_price:.2f}")
+                            # Always log exit order (broker response already printed by place_option_order)
+                            combined_exit_order_id = exit_order.get('order_id', None) if exit_order else None
+                            write_to_order_logs(f"EXIT ORDER PLACED: SELL {option_symbol} (All Positions Combined) | Order ID: {combined_exit_order_id if combined_exit_order_id else 'N/A'} | Total Quantity: {total_lotsize} | Exit Price: {exit_price:.2f}")
                     except Exception as e:
-                        print(f"[Buy Exit] Error placing initial exit order: {str(e)}")
-                        write_to_order_logs(f"EXIT ORDER ERROR: SELL {option_symbol} (Initial Position) | Error: {str(e)}")
+                        print(f"[Buy Exit] Error placing exit order: {str(e)}")
+                        write_to_order_logs(f"EXIT ORDER ERROR: SELL {option_symbol} (All Positions) | Error: {str(e)}")
                         traceback.print_exc()
                 
-                # Exit each pyramiding position with separate order (different strikes may have different symbols)
-                pyramiding_exit_orders = []
-                for idx, pos in enumerate(pyramiding_positions, start=1):
-                    pyr_option_symbol = pos.get('option_symbol', None)
-                    if not pyr_option_symbol:
-                        pyr_option_symbol = option_symbol  # Fallback to initial if not stored
-                    
-                    pyr_exit_order_id = None
-                    pyr_exit_price = None
-                    if pyr_option_symbol and option_exchange and kite_client:
-                        try:
-                            quote = get_option_quote(kite_client, option_exchange, pyr_option_symbol)
-                            option_ltp = quote.get('last_price', None)
-                            if option_ltp is not None:
-                                option_ltp = float(option_ltp)
-                                pyr_exit_price = option_ltp
-                                # Place separate order for this pyramiding position
-                                exit_order = place_option_order(
-                                    kite=kite_client,
-                                    exchange=option_exchange,
-                                    option_symbol=pyr_option_symbol,
-                                    transaction_type="SELL",
-                                    quantity=lotsize,  # Individual quantity
-                                    order_type="LIMIT",
-                                    product="NRML",
-                                    price=option_ltp
-                                )
-                                pyr_exit_order_id = exit_order.get('order_id', None) if exit_order else None
-                                write_to_order_logs(f"EXIT ORDER PLACED: SELL {pyr_option_symbol} (Pyramiding Position #{idx}) | Order ID: {pyr_exit_order_id if pyr_exit_order_id else 'N/A'} | Quantity: {lotsize} | Exit Price: {pyr_exit_price:.2f}")
-                                pyramiding_exit_orders.append({
-                                    'position_num': idx,
-                                    'option_symbol': pyr_option_symbol,
-                                    'order_id': pyr_exit_order_id,
-                                    'exit_price': pyr_exit_price
-                                })
-                        except Exception as e:
-                            print(f"[Buy Exit] Error placing pyramiding exit order #{idx}: {str(e)}")
-                            write_to_order_logs(f"EXIT ORDER ERROR: SELL {pyr_option_symbol} (Pyramiding Position #{idx}) | Error: {str(e)}")
-                            traceback.print_exc()
+                # Get entry option price for initial position
+                entry_option_price_initial = trading_state.get('entry_option_price', None)
+                current_sl = trading_state.get('current_sl', None)
                 
                 # Log initial position exit to CSV
-                if first_entry_price is not None and initial_exit_price is not None and entry_option_price_initial is not None:
+                if first_entry_price is not None and exit_price is not None and entry_option_price_initial is not None:
                     write_to_signal_csv(
                         action='buyexit',
-                        option_price=initial_exit_price,
+                        option_price=exit_price,
                         option_contract=option_symbol if option_symbol else "N/A",
                         future_contract=future_symbol,
                         future_price=ha_close,
@@ -2458,35 +2287,16 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         entry_option_price=entry_option_price_initial
                     )
                 
-                # Log each pyramiding position exit to CSV (with their own exit prices)
+                # Log each pyramiding position exit to CSV
                 for idx, pos in enumerate(pyramiding_positions, start=1):
                     entry_future_price = pos.get('entry_price', None)
                     entry_option_price_pyr = pos.get('entry_option_price', None)
-                    pyr_option_symbol = pos.get('option_symbol', option_symbol)
-                    
-                    # Find corresponding exit price from pyramiding_exit_orders
-                    pyr_exit_price = None
-                    for exit_order_info in pyramiding_exit_orders:
-                        if exit_order_info['position_num'] == idx:
-                            pyr_exit_price = exit_order_info.get('exit_price', None)
-                            break
-                    
-                    # If not found, try to get from quote
-                    if pyr_exit_price is None and pyr_option_symbol and option_exchange and kite_client:
-                        try:
-                            quote = get_option_quote(kite_client, option_exchange, pyr_option_symbol)
-                            option_ltp = quote.get('last_price', None)
-                            if option_ltp is not None:
-                                pyr_exit_price = float(option_ltp)
-                        except Exception:
-                            pass
-                    
-                    if entry_future_price is not None and pyr_exit_price is not None and entry_option_price_pyr is not None:
+                    if entry_future_price is not None and exit_price is not None and entry_option_price_pyr is not None:
                         action_name = f'pyramiding trade buy ({idx}) exit'
                         write_to_signal_csv(
                             action=action_name,
-                            option_price=pyr_exit_price,
-                            option_contract=pyr_option_symbol,
+                            option_price=exit_price,
+                            option_contract=pos.get('option_symbol', option_symbol),
                             future_contract=future_symbol,
                             future_price=ha_close,
                             lotsize=lotsize,
@@ -2497,49 +2307,38 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                 
                 # Detailed exit log
                 write_to_order_logs("="*80)
-                write_to_order_logs(f"SUPERTREND EXIT TRIGGERED | {current_position} Position | Symbol: {future_symbol} ({symbol})")
+                write_to_order_logs(f"PYRAMIDING EXIT TRIGGERED | {current_position} Position | Symbol: {future_symbol} ({symbol})")
                 write_to_order_logs(f"Exit Reason: Supertrend flipped from GREEN (1) to RED (-1)")
                 write_to_order_logs(f"Total Positions to Exit: {pyramiding_count}")
                 write_to_order_logs("-"*80)
                 
                 # Log initial position exit (P&L calculation for tracking)
-                if option_symbol and initial_exit_price is not None and first_entry_price is not None and entry_option_price_initial is not None:
+                if option_symbol and exit_price is not None and first_entry_price is not None and entry_option_price_initial is not None:
                     initial_entry = first_entry_price
-                    initial_pnl = initial_exit_price - entry_option_price_initial if entry_option_price_initial > 0 else 0
+                    initial_pnl = exit_price - entry_option_price_initial if entry_option_price_initial > 0 else 0
                     write_to_order_logs(f"Position #1 (Initial):")
                     write_to_order_logs(f"  Option: {option_symbol}")
                     write_to_order_logs(f"  Entry Future Price: {initial_entry:.2f}")
                     write_to_order_logs(f"  Entry Option Price: {entry_option_price_initial:.2f}")
-                    write_to_order_logs(f"  Exit Option Price: {initial_exit_price:.2f}")
+                    write_to_order_logs(f"  Exit Option Price: {exit_price:.2f}")
                     write_to_order_logs(f"  Quantity: {lotsize}")
                     write_to_order_logs(f"  P&L per unit: {initial_pnl:+.2f}")
-                    write_to_order_logs(f"  Order ID: {initial_exit_order_id if initial_exit_order_id else 'N/A'}")
+                    write_to_order_logs(f"  Order ID: {combined_exit_order_id if combined_exit_order_id else 'N/A'} (Combined Order)")
                 
                 # Log all pyramiding positions (P&L calculation for tracking)
                 for idx, pos in enumerate(pyramiding_positions, start=1):
                     entry_future_price = pos.get('entry_price', None)
                     entry_option_price_pyr = pos.get('entry_option_price', None)
-                    pyr_option_symbol = pos.get('option_symbol', option_symbol)
-                    
-                    # Find corresponding exit info
-                    pyr_exit_price = None
-                    pyr_exit_order_id = None
-                    for exit_order_info in pyramiding_exit_orders:
-                        if exit_order_info['position_num'] == idx:
-                            pyr_exit_price = exit_order_info.get('exit_price', None)
-                            pyr_exit_order_id = exit_order_info.get('order_id', None)
-                            break
-                    
-                    if entry_future_price is not None and pyr_exit_price is not None and entry_option_price_pyr is not None:
-                        pnl = pyr_exit_price - entry_option_price_pyr if entry_option_price_pyr > 0 else 0
+                    if entry_future_price is not None and exit_price is not None and entry_option_price_pyr is not None:
+                        pnl = exit_price - entry_option_price_pyr if entry_option_price_pyr > 0 else 0
                         write_to_order_logs(f"Position #{idx + 1} (Pyramiding):")
-                        write_to_order_logs(f"  Option: {pyr_option_symbol}")
+                        write_to_order_logs(f"  Option: {pos.get('option_symbol', option_symbol)}")
                         write_to_order_logs(f"  Entry Future Price: {entry_future_price:.2f}")
                         write_to_order_logs(f"  Entry Option Price: {entry_option_price_pyr:.2f}")
-                        write_to_order_logs(f"  Exit Option Price: {pyr_exit_price:.2f}")
+                        write_to_order_logs(f"  Exit Option Price: {exit_price:.2f}")
                         write_to_order_logs(f"  Quantity: {lotsize}")
                         write_to_order_logs(f"  P&L per unit: {pnl:+.2f}")
-                        write_to_order_logs(f"  Order ID: {pyr_exit_order_id if pyr_exit_order_id else 'N/A'}")
+                        write_to_order_logs(f"  Order ID: {combined_exit_order_id if combined_exit_order_id else 'N/A'} (Combined Order)")
                 
                 write_to_order_logs("-"*80)
                 write_to_order_logs(f"PYRAMIDING RESET CONFIRMED:")
@@ -2575,7 +2374,7 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
         if current_position == 'SELL':
             # Exit ONLY when SuperTrend flips from RED (-1) to GREEN (1)
             if prev_supertrend_trend is not None and prev_supertrend_trend == -1 and supertrend_trend == 1:
-                # Exit all pyramiding positions for SELL - using SEPARATE orders for each position
+                # Exit all pyramiding positions for SELL
                 option_symbol = trading_state.get('option_symbol', None)
                 option_exchange = trading_state.get('option_exchange', None)
                 pyramiding_positions = trading_state.get('pyramiding_positions', [])
@@ -2586,83 +2385,47 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                 # Get first_entry_price before exiting
                 first_entry_price = trading_state.get('first_entry_price', None)
                 
-                # Get entry option price for initial position
-                entry_option_price_initial = trading_state.get('entry_option_price', None)
-                current_sl = trading_state.get('current_sl', None)
+                # Calculate total quantity (initial + all pyramiding positions)
+                total_lotsize = lotsize * pyramiding_count if pyramiding_count > 0 else lotsize
                 
-                # Exit initial position with separate order
-                initial_exit_order_id = None
-                initial_exit_price = None
+                # Exit all positions with ONE combined order
+                combined_exit_order_id = None
+                exit_price = None
                 if option_symbol and option_exchange and kite_client:
                     try:
                         quote = get_option_quote(kite_client, option_exchange, option_symbol)
                         option_ltp = quote.get('last_price', None)
                         if option_ltp is not None:
                             option_ltp = float(option_ltp)
-                            initial_exit_price = option_ltp
-                            # Place separate order for initial position
+                            exit_price = option_ltp
+                            # Place ONE combined order for all positions
                             exit_order = place_option_order(
                                 kite=kite_client,
                                 exchange=option_exchange,
                                 option_symbol=option_symbol,
                                 transaction_type="SELL",
-                                quantity=lotsize,  # Individual quantity, not combined
+                                quantity=total_lotsize,  # Combined quantity
                                 order_type="LIMIT",
                                 product="NRML",
                                 price=option_ltp
                             )
-                            initial_exit_order_id = exit_order.get('order_id', None) if exit_order else None
-                            write_to_order_logs(f"EXIT ORDER PLACED: SELL {option_symbol} (Initial Position) | Order ID: {initial_exit_order_id if initial_exit_order_id else 'N/A'} | Quantity: {lotsize} | Exit Price: {initial_exit_price:.2f}")
+                            # Always log exit order (broker response already printed by place_option_order)
+                            combined_exit_order_id = exit_order.get('order_id', None) if exit_order else None
+                            write_to_order_logs(f"EXIT ORDER PLACED: SELL {option_symbol} (All Positions Combined) | Order ID: {combined_exit_order_id if combined_exit_order_id else 'N/A'} | Total Quantity: {total_lotsize} | Exit Price: {exit_price:.2f}")
                     except Exception as e:
-                        print(f"[Sell Exit] Error placing initial exit order: {str(e)}")
-                        write_to_order_logs(f"EXIT ORDER ERROR: SELL {option_symbol} (Initial Position) | Error: {str(e)}")
+                        print(f"[Sell Exit] Error placing exit order: {str(e)}")
+                        write_to_order_logs(f"EXIT ORDER ERROR: SELL {option_symbol} (All Positions) | Error: {str(e)}")
                         traceback.print_exc()
                 
-                # Exit each pyramiding position with separate order (different strikes may have different symbols)
-                pyramiding_exit_orders = []
-                for idx, pos in enumerate(pyramiding_positions, start=1):
-                    pyr_option_symbol = pos.get('option_symbol', None)
-                    if not pyr_option_symbol:
-                        pyr_option_symbol = option_symbol  # Fallback to initial if not stored
-                    
-                    pyr_exit_order_id = None
-                    pyr_exit_price = None
-                    if pyr_option_symbol and option_exchange and kite_client:
-                        try:
-                            quote = get_option_quote(kite_client, option_exchange, pyr_option_symbol)
-                            option_ltp = quote.get('last_price', None)
-                            if option_ltp is not None:
-                                option_ltp = float(option_ltp)
-                                pyr_exit_price = option_ltp
-                                # Place separate order for this pyramiding position
-                                exit_order = place_option_order(
-                                    kite=kite_client,
-                                    exchange=option_exchange,
-                                    option_symbol=pyr_option_symbol,
-                                    transaction_type="SELL",
-                                    quantity=lotsize,  # Individual quantity
-                                    order_type="LIMIT",
-                                    product="NRML",
-                                    price=option_ltp
-                                )
-                                pyr_exit_order_id = exit_order.get('order_id', None) if exit_order else None
-                                write_to_order_logs(f"EXIT ORDER PLACED: SELL {pyr_option_symbol} (Pyramiding Position #{idx}) | Order ID: {pyr_exit_order_id if pyr_exit_order_id else 'N/A'} | Quantity: {lotsize} | Exit Price: {pyr_exit_price:.2f}")
-                                pyramiding_exit_orders.append({
-                                    'position_num': idx,
-                                    'option_symbol': pyr_option_symbol,
-                                    'order_id': pyr_exit_order_id,
-                                    'exit_price': pyr_exit_price
-                                })
-                        except Exception as e:
-                            print(f"[Sell Exit] Error placing pyramiding exit order #{idx}: {str(e)}")
-                            write_to_order_logs(f"EXIT ORDER ERROR: SELL {pyr_option_symbol} (Pyramiding Position #{idx}) | Error: {str(e)}")
-                            traceback.print_exc()
+                # Get entry option price for initial position
+                entry_option_price_initial = trading_state.get('entry_option_price', None)
+                current_sl = trading_state.get('current_sl', None)
                 
                 # Log initial position exit to CSV
-                if first_entry_price is not None and initial_exit_price is not None and entry_option_price_initial is not None:
+                if first_entry_price is not None and exit_price is not None and entry_option_price_initial is not None:
                     write_to_signal_csv(
                         action='sellexit',
-                        option_price=initial_exit_price,
+                        option_price=exit_price,
                         option_contract=option_symbol if option_symbol else "N/A",
                         future_contract=future_symbol,
                         future_price=ha_close,
@@ -2672,35 +2435,16 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         entry_option_price=entry_option_price_initial
                     )
                 
-                # Log each pyramiding position exit to CSV (with their own exit prices)
+                # Log each pyramiding position exit to CSV
                 for idx, pos in enumerate(pyramiding_positions, start=1):
                     entry_future_price = pos.get('entry_price', None)
                     entry_option_price_pyr = pos.get('entry_option_price', None)
-                    pyr_option_symbol = pos.get('option_symbol', option_symbol)
-                    
-                    # Find corresponding exit price from pyramiding_exit_orders
-                    pyr_exit_price = None
-                    for exit_order_info in pyramiding_exit_orders:
-                        if exit_order_info['position_num'] == idx:
-                            pyr_exit_price = exit_order_info.get('exit_price', None)
-                            break
-                    
-                    # If not found, try to get from quote
-                    if pyr_exit_price is None and pyr_option_symbol and option_exchange and kite_client:
-                        try:
-                            quote = get_option_quote(kite_client, option_exchange, pyr_option_symbol)
-                            option_ltp = quote.get('last_price', None)
-                            if option_ltp is not None:
-                                pyr_exit_price = float(option_ltp)
-                        except Exception:
-                            pass
-                    
-                    if entry_future_price is not None and pyr_exit_price is not None and entry_option_price_pyr is not None:
+                    if entry_future_price is not None and exit_price is not None and entry_option_price_pyr is not None:
                         action_name = f'pyramiding trade sell ({idx}) exit'
                         write_to_signal_csv(
                             action=action_name,
-                            option_price=pyr_exit_price,
-                            option_contract=pyr_option_symbol,
+                            option_price=exit_price,
+                            option_contract=pos.get('option_symbol', option_symbol),
                             future_contract=future_symbol,
                             future_price=ha_close,
                             lotsize=lotsize,
@@ -2711,49 +2455,38 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                 
                 # Detailed exit log
                 write_to_order_logs("="*80)
-                write_to_order_logs(f"SUPERTREND EXIT TRIGGERED | {current_position} Position | Symbol: {future_symbol} ({symbol})")
+                write_to_order_logs(f"PYRAMIDING EXIT TRIGGERED | {current_position} Position | Symbol: {future_symbol} ({symbol})")
                 write_to_order_logs(f"Exit Reason: Supertrend flipped from RED (-1) to GREEN (1)")
                 write_to_order_logs(f"Total Positions to Exit: {pyramiding_count}")
                 write_to_order_logs("-"*80)
                 
                 # Log initial position exit (P&L calculation for tracking)
-                if option_symbol and initial_exit_price is not None and first_entry_price is not None and entry_option_price_initial is not None:
+                if option_symbol and exit_price is not None and first_entry_price is not None and entry_option_price_initial is not None:
                     initial_entry = first_entry_price
-                    initial_pnl = entry_option_price_initial - initial_exit_price if entry_option_price_initial > 0 else 0  # SELL: entry - exit
+                    initial_pnl = entry_option_price_initial - exit_price if entry_option_price_initial > 0 else 0  # SELL: entry - exit
                     write_to_order_logs(f"Position #1 (Initial):")
                     write_to_order_logs(f"  Option: {option_symbol}")
                     write_to_order_logs(f"  Entry Future Price: {initial_entry:.2f}")
                     write_to_order_logs(f"  Entry Option Price: {entry_option_price_initial:.2f}")
-                    write_to_order_logs(f"  Exit Option Price: {initial_exit_price:.2f}")
+                    write_to_order_logs(f"  Exit Option Price: {exit_price:.2f}")
                     write_to_order_logs(f"  Quantity: {lotsize}")
                     write_to_order_logs(f"  P&L per unit: {initial_pnl:+.2f}")
-                    write_to_order_logs(f"  Order ID: {initial_exit_order_id if initial_exit_order_id else 'N/A'}")
+                    write_to_order_logs(f"  Order ID: {combined_exit_order_id if combined_exit_order_id else 'N/A'} (Combined Order)")
                 
                 # Log all pyramiding positions (P&L calculation for tracking)
                 for idx, pos in enumerate(pyramiding_positions, start=1):
                     entry_future_price = pos.get('entry_price', None)
                     entry_option_price_pyr = pos.get('entry_option_price', None)
-                    pyr_option_symbol = pos.get('option_symbol', option_symbol)
-                    
-                    # Find corresponding exit info
-                    pyr_exit_price = None
-                    pyr_exit_order_id = None
-                    for exit_order_info in pyramiding_exit_orders:
-                        if exit_order_info['position_num'] == idx:
-                            pyr_exit_price = exit_order_info.get('exit_price', None)
-                            pyr_exit_order_id = exit_order_info.get('order_id', None)
-                            break
-                    
-                    if entry_future_price is not None and pyr_exit_price is not None and entry_option_price_pyr is not None:
-                        pnl = entry_option_price_pyr - pyr_exit_price if entry_option_price_pyr > 0 else 0  # SELL: entry - exit
+                    if entry_future_price is not None and exit_price is not None and entry_option_price_pyr is not None:
+                        pnl = entry_option_price_pyr - exit_price if entry_option_price_pyr > 0 else 0  # SELL: entry - exit
                         write_to_order_logs(f"Position #{idx + 1} (Pyramiding):")
-                        write_to_order_logs(f"  Option: {pyr_option_symbol}")
+                        write_to_order_logs(f"  Option: {pos.get('option_symbol', option_symbol)}")
                         write_to_order_logs(f"  Entry Future Price: {entry_future_price:.2f}")
                         write_to_order_logs(f"  Entry Option Price: {entry_option_price_pyr:.2f}")
-                        write_to_order_logs(f"  Exit Option Price: {pyr_exit_price:.2f}")
+                        write_to_order_logs(f"  Exit Option Price: {exit_price:.2f}")
                         write_to_order_logs(f"  Quantity: {lotsize}")
                         write_to_order_logs(f"  P&L per unit: {pnl:+.2f}")
-                        write_to_order_logs(f"  Order ID: {pyr_exit_order_id if pyr_exit_order_id else 'N/A'}")
+                        write_to_order_logs(f"  Order ID: {combined_exit_order_id if combined_exit_order_id else 'N/A'} (Combined Order)")
                 
                 write_to_order_logs("-"*80)
                 write_to_order_logs(f"PYRAMIDING RESET CONFIRMED:")
@@ -3492,14 +3225,19 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                                     'entry_option_price': option_ltp if option_ltp else 0  # Option price at entry
                                 })
                                 
-                                # Update entry_prices list (for tracking only, NOT for SL calculation)
+                                # Update entry_prices list and recalculate SL (average of all entry prices)
                                 entry_prices = trading_state.get('entry_prices', [])
                                 entry_prices.append(ha_close)  # Add new entry price
                                 trading_state['entry_prices'] = entry_prices
                                 
-                                # NOTE: SL remains unchanged after pyramiding - current_sl stays at initial_sl value
-                                # Do NOT recalculate SL as average - only initial ATR-based SL is used
-                                write_to_order_logs(f"PYRAMIDING POSITION ADDED | Position #{pyramiding_count} | Entry Price: {ha_close:.2f} | SL Remains: {trading_state.get('current_sl', 'N/A'):.2f if trading_state.get('current_sl') else 'N/A'} (Initial SL, not averaged)")
+                                # Calculate new SL as average of all entry prices
+                                new_sl = calculate_average_entry_price(entry_prices)
+                                if new_sl is not None:
+                                    old_sl = trading_state.get('current_sl', None)
+                                    trading_state['current_sl'] = new_sl
+                                    write_to_order_logs(f"SL UPDATED AFTER PYRAMIDING | Position #{pyramiding_count} | Old SL: {old_sl:.2f if old_sl else 'N/A'} | New SL: {new_sl:.2f} (Average of {len(entry_prices)} entry prices: {entry_prices})")
+                                else:
+                                    write_to_order_logs(f"WARNING: Could not calculate new SL after pyramiding")
                                 
                                 # Calculate price movement from first entry
                                 price_movement = ha_close - first_entry_price if current_position == 'BUY' else first_entry_price - ha_close

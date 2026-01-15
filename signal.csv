@@ -1,1 +1,4 @@
 timestamp,action,optionprice,optioncontract,futurecontract,futureprice,lotsize,Stop loss,Margin,Points Captured,Charges,P&L (Abs.),P&L (%)
+13-01-2026 16:04,Armed Buy,,,CRUDEOIL26JANFUT,5433.00,,,,,,,
+13-01-2026 17:24,Armed Sell,,,CRUDEOIL26JANFUT,5482.00,,,,,,,
+13-01-2026 19:23,Armed Buy,,,CRUDEOIL26JANFUT,5454.00,,,,,,,
