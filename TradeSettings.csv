@@ -1,2 +1,2 @@
-Symbol,Expiery,Timeframe,StrikeStep,StrikeNumber,Lotsize,VolumeMa,SupertrendPeriod,SupertrendMul,KC1_Length,KC1_Mul,KC1_ATR,KC2_Length,KC2_Mul,KC2_ATR,PyramidingDistance,PyramidingNumber,SLATR,SLMULTIPLIER
-CRUDEOIL,26-01-2026,minute,100,3,1,29,10,1.5,50,3.75,12,50,2.75,14,10,100,14,2.5
+Symbol,Expiery,Timeframe,StrikeStep,StrikeNumber,Lotsize,VolumeMa,SupertrendPeriod,SupertrendMul,KC1_Length,KC1_Mul,KC1_ATR,KC2_Length,KC2_Mul,KC2_ATR,PyramidingDistance,PyramidingNumber,SLATR,SLMULTIPLIER,starttime,stoptime,PREFIX
+CRUDEOIL,26-01-2026,minute,100,3,1,29,10,1.5,50,3.75,12,50,2.75,14,10,100,14,2.5,9:00,15:30,MCX

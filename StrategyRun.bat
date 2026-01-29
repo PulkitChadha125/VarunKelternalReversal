@@ -57,11 +57,11 @@ echo.
 
 REM Start the trading bot
 echo ========================================
-echo Starting Trading Bot...
+echo Starting Trading Bot (Fyers + Zerodha)...
 echo ========================================
 echo.
 
-python MainPyramidingSl.py
+python main_pyramiding_sl_fyers_zerodha.py
 
 REM If main.py exits, pause so user can see any error messages
 if errorlevel 1 (

@@ -268,7 +268,8 @@ def fetchOHLC_Scanner(symbol):
     response = fyers.history(data=data)
     cl = ['date', 'open', 'high', 'low', 'close', 'volume']
     df = pd.DataFrame(response['candles'], columns=cl)
-    df['date']=df['date'].apply(pd.Timestamp,unit='s',tzinfo=pytz.timezone('Asia/Kolkata'))
+    # Fyers returns Unix epoch (UTC). Convert to IST for correct candle times.
+    df['date'] = pd.to_datetime(df['date'], unit='s').dt.tz_localize('UTC').dt.tz_convert('Asia/Kolkata')
     return df.tail(5)
 
 def fetchOHLC_Weekly(symbol):
@@ -400,7 +401,8 @@ def fetchOHLC(symbol,tf):
     # print("response: ",response)
     cl = ['date', 'open', 'high', 'low', 'close', 'volume']
     df = pd.DataFrame(response['candles'], columns=cl)
-    df['date']=df['date'].apply(pd.Timestamp,unit='s',tzinfo=pytz.timezone('Asia/Kolkata'))
+    # Fyers returns Unix epoch (UTC). Convert to IST for correct candle times.
+    df['date'] = pd.to_datetime(df['date'], unit='s').dt.tz_localize('UTC').dt.tz_convert('Asia/Kolkata')
     return df
 
 

@@ -1,3 +1,4 @@
+import re
 import pandas as pd
 from datetime import datetime, timedelta, time as dt_time
 import polars as pl
@@ -45,248 +46,235 @@ def write_to_order_logs(message):
         print(f"[OrderLog] Error writing to log: {str(e)}")
 
 
-def initialize_signal_csv():
+# Folder for per-symbol signal CSV files (e.g. signal/crudeoilsignal.csv)
+SIGNAL_CSV_DIR = 'signal'
+
+# Column headers for per-symbol trade CSV (Excel-style)
+SIGNAL_CSV_COLUMNS = [
+    'Time Stamp', 'Action', 'Action Note', 'Opt Contract', 'Future Contract', 'Exit Type',
+    'Future Price', 'Opt Price (Order)', 'Opt Price (Trade)', 'Slipage', 'Lot', 'Lot Size',
+    'Stop loss', 'Margin', 'Points Cap (Fut)', 'Points Cap (Opt)', 'Charges', 'P&L (Abs.)', 'P&L (%)'
+]
+
+
+def _signal_csv_path(symbol):
+    """Return path to symbol's signal CSV inside the signal folder (e.g. signal/crudeoilsignal.csv)."""
+    return Path(SIGNAL_CSV_DIR) / f'{symbol}signal.csv'
+
+
+def _symbol_from_future_contract(future_contract):
     """
-    Initialize or verify signal.csv file with all required columns.
-    Creates the file with headers if it doesn't exist.
-    If file exists, checks and adds any missing columns.
+    Derive symbol name for CSV filename from future contract.
+    E.g. CRUDEOIL26JANFUT -> crudeoil, BANKNIFTY24JANFUT -> banknifty.
     """
-    csv_file = 'signal.csv'
-    required_columns = [
-        'timestamp', 'action', 'optionprice', 'optioncontract', 'futurecontract', 
-        'futureprice', 'lotsize', 'Stop loss', 'Margin', 'Points Captured', 
-        'Charges', 'P&L (Abs.)', 'P&L (%)'
-    ]
-    
-    try:
-        file_exists = Path(csv_file).exists()
-        
-        if not file_exists:
-            # File doesn't exist - create it with all headers
-            print(f"[CSV Init] Creating {csv_file} with headers...")
-            with open(csv_file, 'w', newline='', encoding='utf-8') as file:
-                writer = csv.writer(file)
-                writer.writerow(required_columns)
-            print(f"[CSV Init] ✓ {csv_file} created successfully with {len(required_columns)} columns")
+    if not future_contract or not isinstance(future_contract, str):
+        return 'unknown'
+    # Strip trailing digits and optional suffix (e.g. 26JANFUT or FUT)
+    base = re.sub(r'\d+[A-Z]*FUT$', '', future_contract, flags=re.IGNORECASE).strip()
+    if not base:
+        base = future_contract
+    return base.lower()
+
+
+def initialize_signal_csv(symbol=None):
+    """
+    Initialize or verify per-symbol signal CSV with required columns.
+    symbol: base symbol for filename (e.g. 'crudeoil' -> crudeoilsignal.csv).
+           If None, initializes CSVs for all symbols in result_dict.
+    """
+    if symbol is not None:
+        symbols_to_init = [symbol]
+    else:
+        # Initialize for all configured symbols from result_dict
+        symbols_to_init = []
+        for params in result_dict.values():
+            future_symbol = params.get('FutureSymbol', '')
+            if future_symbol:
+                s = _symbol_from_future_contract(future_symbol)
+                if s and s != 'unknown' and s not in symbols_to_init:
+                    symbols_to_init.append(s)
+        if not symbols_to_init:
             return
-        
-        # File exists - check if all columns are present
-        with open(csv_file, 'r', newline='', encoding='utf-8') as file:
-            reader = csv.reader(file)
-            try:
-                existing_headers = next(reader)
-            except StopIteration:
-                # File is empty - write headers
-                print(f"[CSV Init] File {csv_file} is empty, writing headers...")
-                with open(csv_file, 'w', newline='', encoding='utf-8') as write_file:
-                    writer = csv.writer(write_file)
+    Path(SIGNAL_CSV_DIR).mkdir(parents=True, exist_ok=True)
+    for sym in symbols_to_init:
+        csv_file = _signal_csv_path(sym)
+        required_columns = list(SIGNAL_CSV_COLUMNS)
+        try:
+            file_exists = csv_file.exists()
+            if not file_exists:
+                print(f"[CSV Init] Creating {csv_file} with headers...")
+                with open(csv_file, 'w', newline='', encoding='utf-8') as file:
+                    writer = csv.writer(file)
                     writer.writerow(required_columns)
-                print(f"[CSV Init] ✓ Headers written to {csv_file}")
-                return
-        
-        # Normalize headers (convert to lowercase, strip spaces)
-        existing_headers_normalized = [h.strip().lower() for h in existing_headers if h.strip()]
-        required_columns_normalized = [h.strip().lower() for h in required_columns]
-        
-        # Check for missing columns
-        missing_columns = []
-        for req_col in required_columns:
-            req_col_normalized = req_col.strip().lower()
-            if req_col_normalized not in existing_headers_normalized:
-                missing_columns.append(req_col)
-        
-        if missing_columns:
-            # Add missing columns to header
-            print(f"[CSV Init] Found {len(missing_columns)} missing columns in {csv_file}")
-            print(f"[CSV Init] Missing columns: {missing_columns}")
-            
-            # Read all existing data
+                print(f"[CSV Init] ✓ {csv_file} created with {len(required_columns)} columns")
+                continue
             with open(csv_file, 'r', newline='', encoding='utf-8') as file:
                 reader = csv.reader(file)
-                rows = list(reader)
-            
-            if len(rows) > 0:
-                # Update header row with missing columns
-                updated_header = existing_headers + missing_columns
-                rows[0] = updated_header
-                
-                # Add empty values for missing columns in data rows
-                num_missing = len(missing_columns)
-                for i in range(1, len(rows)):
-                    rows[i].extend([''] * num_missing)
-                
-                # Write back to file
-                with open(csv_file, 'w', newline='', encoding='utf-8') as file:
-                    writer = csv.writer(file)
-                    writer.writerows(rows)
-                
-                print(f"[CSV Init] ✓ Added {len(missing_columns)} missing columns to {csv_file}")
+                try:
+                    existing_headers = next(reader)
+                except StopIteration:
+                    with open(csv_file, 'w', newline='', encoding='utf-8') as write_file:
+                        writer = csv.writer(write_file)
+                        writer.writerow(required_columns)
+                    print(f"[CSV Init] ✓ Headers written to {csv_file}")
+                    continue
+            existing_headers_normalized = [h.strip().lower() for h in existing_headers if h.strip()]
+            required_columns_normalized = [h.strip().lower() for h in required_columns]
+            missing_columns = [c for c in required_columns if c.strip().lower() not in existing_headers_normalized]
+            if missing_columns:
+                with open(csv_file, 'r', newline='', encoding='utf-8') as file:
+                    reader = csv.reader(file)
+                    rows = list(reader)
+                if len(rows) > 0:
+                    rows[0] = existing_headers + missing_columns
+                    for i in range(1, len(rows)):
+                        rows[i].extend([''] * len(missing_columns))
+                    with open(csv_file, 'w', newline='', encoding='utf-8') as file:
+                        writer = csv.writer(file)
+                        writer.writerows(rows)
+                    print(f"[CSV Init] ✓ Added {len(missing_columns)} columns to {csv_file}")
+                else:
+                    with open(csv_file, 'w', newline='', encoding='utf-8') as file:
+                        writer = csv.writer(file)
+                        writer.writerow(required_columns)
+                    print(f"[CSV Init] ✓ Updated headers in {csv_file}")
             else:
-                # Only header row exists - just update it
-                with open(csv_file, 'w', newline='', encoding='utf-8') as file:
-                    writer = csv.writer(file)
-                    writer.writerow(required_columns)
-                print(f"[CSV Init] ✓ Updated headers in {csv_file}")
-        else:
-            print(f"[CSV Init] ✓ {csv_file} already has all required columns")
-            
-    except Exception as e:
-        print(f"[CSV Init] Error initializing {csv_file}: {str(e)}")
-        traceback.print_exc()
+                print(f"[CSV Init] ✓ {csv_file} already has all required columns")
+        except Exception as e:
+            print(f"[CSV Init] Error initializing {csv_file}: {str(e)}")
+            traceback.print_exc()
+
+
+def _action_note_from_action(action):
+    """Derive Action Note from action string for Excel column."""
+    a = action.strip().lower()
+    if a == 'armed buy':
+        return 'Armed'
+    if a == 'armed sell':
+        return 'Armed'
+    if a == 'buy':
+        return 'Buy'
+    if a == 'sell':
+        return 'Sell'
+    if a == 'buyexit':
+        return 'Buy Exit'
+    if a == 'sellexit':
+        return 'Sell Exit'
+    if 'pyramiding' in a and 'exit' in a:
+        return 'Pyramiding Exit'
+    if 'pyramiding' in a:
+        return 'Pyramiding Add'
+    return action
 
 
 def write_to_signal_csv(action, option_price=None, option_contract=None, future_contract=None, future_price=None, lotsize=0, 
-                        stop_loss=None, entry_future_price=None, entry_option_price=None, charges=63, position_num=None):
+                        stop_loss=None, entry_future_price=None, entry_option_price=None, charges=63, position_num=None,
+                        symbol=None, exit_type=None, option_order_price=None, lot_size=100):
     """
-    Write trading signal to signal.csv file in the new format matching sampleformat.csv.
+    Write trading signal to symbol-specific CSV (e.g. crudeoilsignal.csv) with Excel-style columns.
     
     Args:
         action: 'Armed Buy', 'Armed Sell', 'buy', 'sell', 'pyramiding trade buy (N)', 'pyramiding trade sell (N)', 
                 'buyexit', 'sellexit', 'pyramiding trade buy (N) exit', 'pyramiding trade sell (N) exit'
-        option_price: Price of the option (LTP or order price) - None for armed actions, exit price for exits
-        option_contract: Option symbol (e.g., 'CRUDEOIL25NOV5300CE') - None for armed actions
-        future_contract: Future symbol (e.g., 'CRUDEOIL25NOVFUT')
-        future_price: Future price (HA_Close or LTP) - current price
-        lotsize: Quantity/lotsize for the trade
-        stop_loss: Current stop loss value (None for entries, value for exits)
-        entry_future_price: Entry future price (for calculating Points Captured on exits)
-        entry_option_price: Entry option price (for calculating P&L on exits)
-        charges: Brokerage/charges (default: 63)
-        position_num: Position number for pyramiding (1, 2, 3...) - None for initial entries/exits
+        option_price: Option price at trade (LTP/execution) - None for armed, exit price for exits
+        option_contract: Option symbol - None for armed
+        future_contract: Future symbol (e.g. CRUDEOIL26JANFUT) - used to derive symbol filename if symbol not set
+        future_price: Future price (HA_Close or LTP)
+        lotsize: Number of lots (e.g. 1)
+        stop_loss: Stop loss value (exits only)
+        entry_future_price: Entry future price (for Points Cap (Fut) on exits)
+        entry_option_price: Entry option price (for P&L on exits)
+        charges: Brokerage/charges (default 63)
+        position_num: Pyramiding position number
+        symbol: Base symbol for filename (e.g. 'crudeoil'). Derived from future_contract if None.
+        exit_type: 'SL Exit' or 'ST Exit' for exit rows; empty for entries.
+        option_order_price: Option price at order (Opt Price (Order)); empty if not tracked.
+        lot_size: Lot size multiplier (default 100 for options).
     """
     try:
-        csv_file = 'signal.csv'
-        # Format: DD-MM-YYYY HH:MM
+        sym = symbol if symbol is not None else _symbol_from_future_contract(future_contract)
+        Path(SIGNAL_CSV_DIR).mkdir(parents=True, exist_ok=True)
+        csv_file = _signal_csv_path(sym)
+        if not csv_file.exists():
+            initialize_signal_csv(sym)
         timestamp = datetime.now().strftime("%d-%m-%Y %H:%M")
-        
-        # Ensure file exists and has all columns (safety check)
-        file_exists = Path(csv_file).exists()
-        if not file_exists:
-            # File was deleted - reinitialize it
-            initialize_signal_csv()
-        
-        # Calculate Margin: OptionPrice × Lotsize × 100 (only for entries, not exits)
+        action_note = _action_note_from_action(action)
+        exit_type_str = exit_type if exit_type else ""
+        opt_order_str = f"{option_order_price:.1f}" if option_order_price is not None else ""
+        opt_trade_str = f"{option_price:.1f}" if option_price is not None else ""
+        future_price_str = f"{future_price:.2f}" if future_price is not None else ""
+        lot_count = lotsize if lotsize else 1
         margin = ""
         if option_price is not None and 'exit' not in action.lower():
-            margin = int(option_price * lotsize * 100)
-        
-        # Calculate Points Captured (only for exits)
-        points_captured = ""
+            margin = int(option_price * lot_count * lot_size)
+        points_cap_fut = ""
         if entry_future_price is not None and future_price is not None and 'exit' in action.lower():
             if 'buy' in action.lower():
-                # BUY: Exit - Entry
-                points_captured = f"{future_price - entry_future_price:.1f}"
+                points_cap_fut = f"{future_price - entry_future_price:.1f}"
             elif 'sell' in action.lower():
-                # SELL: Entry - Exit
-                points_captured = f"{entry_future_price - future_price:.1f}"
-        
-        # Calculate P&L (Abs.) and P&L (%) - based on option prices (only for exits)
+                points_cap_fut = f"{entry_future_price - future_price:.1f}"
         pnl_abs = ""
         pnl_percent = ""
         if entry_option_price is not None and option_price is not None and 'exit' in action.lower():
-            # Calculate P&L per unit
             if 'buy' in action.lower():
-                # BUY: Exit - Entry (profit when exit > entry)
                 pnl_per_unit = option_price - entry_option_price
             elif 'sell' in action.lower():
-                # SELL: Entry - Exit (profit when entry > exit)
                 pnl_per_unit = entry_option_price - option_price
             else:
                 pnl_per_unit = 0
-            
-            # Calculate absolute P&L: (P&L per unit) × Lotsize × 100 - Charges
-            pnl_abs_value = (pnl_per_unit * lotsize * 100) - charges
+            pnl_abs_value = (pnl_per_unit * lot_count * lot_size) - charges
             pnl_abs = f"{int(pnl_abs_value)}"
-            
-            # Calculate P&L %: (P&L (Abs.) / Margin) × 100
-            entry_margin = entry_option_price * lotsize * 100
+            entry_margin = entry_option_price * lot_count * lot_size
             if entry_margin > 0:
-                pnl_percent_value = (pnl_abs_value / entry_margin) * 100
-                pnl_percent = f"{pnl_percent_value:.0f}%"
-            else:
-                pnl_percent = ""
-        
-        # Format option_price (1 decimal place)
-        option_price_str = f"{option_price:.1f}" if option_price is not None else ""
-        
-        # Format future_price (2 decimal places)
-        future_price_str = f"{future_price:.2f}" if future_price is not None else ""
-        
-        # Format stop_loss (empty for entries, value for exits)
-        stop_loss_str = ""
-        if stop_loss is not None and 'exit' in action.lower():
-            stop_loss_str = f"{stop_loss:.2f}"
-        
-        # Format margin (integer, empty for exits)
+                pnl_percent = f"{(pnl_abs_value / entry_margin) * 100:.0f}%"
+        stop_loss_str = f"{stop_loss:.2f}" if (stop_loss is not None and 'exit' in action.lower()) else ""
         margin_str = f"{margin}" if margin != "" else ""
-        
-        # Format charges (integer, only for exits)
-        charges_str = f"{int(charges)}" if charges and 'exit' in action.lower() else ""
-        
-        # Read existing headers to ensure we write data in correct order
-        existing_headers = []
-        if file_exists:
-            try:
-                with open(csv_file, 'r', newline='', encoding='utf-8') as file:
-                    reader = csv.reader(file)
-                    existing_headers = next(reader)
-            except (StopIteration, FileNotFoundError):
-                # File is empty or was deleted - reinitialize
-                initialize_signal_csv()
-                existing_headers = ['timestamp', 'action', 'optionprice', 'optioncontract', 'futurecontract', 
-                                   'futureprice', 'lotsize', 'Stop loss', 'Margin', 'Points Captured', 
-                                   'Charges', 'P&L (Abs.)', 'P&L (%)']
-        
-        # Define column order (standard order)
-        column_order = ['timestamp', 'action', 'optionprice', 'optioncontract', 'futurecontract', 
-                       'futureprice', 'lotsize', 'Stop loss', 'Margin', 'Points Captured', 
-                       'Charges', 'P&L (Abs.)', 'P&L (%)']
-        
-        # Create data dictionary for easy mapping
+        charges_str = f"{int(charges)}" if (charges and 'exit' in action.lower()) else ""
         data_dict = {
-            'timestamp': timestamp,
-            'action': action,
-            'optionprice': option_price_str,
-            'optioncontract': option_contract if option_contract else "",
-            'futurecontract': future_contract if future_contract else "",
-            'futureprice': future_price_str,
-            'lotsize': lotsize if lotsize else "",
+            'Time Stamp': timestamp,
+            'Action': action,
+            'Action Note': action_note,
+            'Opt Contract': option_contract if option_contract else "",
+            'Future Contract': future_contract if future_contract else "",
+            'Exit Type': exit_type_str,
+            'Future Price': future_price_str,
+            'Opt Price (Order)': opt_order_str,
+            'Opt Price (Trade)': opt_trade_str,
+            'Slipage': "",
+            'Lot': lot_count,
+            'Lot Size': lot_size,
             'Stop loss': stop_loss_str,
             'Margin': margin_str,
-            'Points Captured': points_captured,
+            'Points Cap (Fut)': points_cap_fut,
+            'Points Cap (Opt)': "",
             'Charges': charges_str,
             'P&L (Abs.)': pnl_abs,
             'P&L (%)': pnl_percent
         }
-        
-        # Build row in the order of existing headers (or standard order if file is new)
-        if existing_headers:
-            # Use existing header order (handles case-insensitive matching)
-            row_data = []
-            for header in existing_headers:
-                header_normalized = header.strip().lower()
-                # Find matching column (case-insensitive)
-                matched = False
-                for col_name, col_value in data_dict.items():
-                    if col_name.strip().lower() == header_normalized:
-                        row_data.append(col_value)
-                        matched = True
-                        break
-                if not matched:
-                    # Column exists in file but not in our data - add empty value
-                    row_data.append("")
-        else:
-            # Use standard order
-            row_data = [data_dict[col] for col in column_order]
-        
-        # Append data row
+        try:
+            with open(csv_file, 'r', newline='', encoding='utf-8') as file:
+                reader = csv.reader(file)
+                existing_headers = next(reader)
+        except (StopIteration, FileNotFoundError):
+            initialize_signal_csv(sym)
+            existing_headers = list(SIGNAL_CSV_COLUMNS)
+        row_data = []
+        for header in existing_headers:
+            hn = header.strip().lower()
+            matched = False
+            for col_name, col_value in data_dict.items():
+                if col_name.strip().lower() == hn:
+                    row_data.append(col_value)
+                    matched = True
+                    break
+            if not matched:
+                row_data.append("")
         with open(csv_file, 'a', newline='', encoding='utf-8') as file:
             writer = csv.writer(file)
             writer.writerow(row_data)
-        
-        print(f"[Signal CSV] Logged: {action} | Option: {option_contract if option_contract else 'N/A'} | Future: {future_contract if future_contract else 'N/A'} | OptionPrice: {option_price_str if option_price_str else 'N/A'} | FuturePrice: {future_price_str if future_price_str else 'N/A'} | Lotsize: {lotsize}")
+        print(f"[Signal CSV] {csv_file} | {action} | Option: {option_contract or 'N/A'} | Future: {future_contract or 'N/A'} | OptPrice: {opt_trade_str or 'N/A'} | FutPrice: {future_price_str or 'N/A'} | Lots: {lot_count}")
     except Exception as e:
-        print(f"[Signal CSV] Error writing to signal.csv: {str(e)}")
+        print(f"[Signal CSV] Error writing to signal CSV: {str(e)}")
         traceback.print_exc()
 
 
@@ -547,11 +535,21 @@ def get_user_settings():
             PyramidingNumber = int(row['PyramidingNumber'])
             SLATR = int(row['SLATR'])  # ATR period for initial SL calculation
             SLMULTIPLIER = float(row['SLMULTIPLIER'])  # Multiplier for ATR in initial SL calculation
+            
+            # Read starttime and stoptime (optional columns)
+            starttime = row.get('starttime', None)  # Format: "9:00" or "9:00:00" or "9:15:15"
+            stoptime = row.get('stoptime', None)    # Format: "15:30" or "15:30:00" or "23:30:00"
+            
+            # Read PREFIX column (for Fyers exchange prefix)
+            prefix = row.get('PREFIX', None)  # Format: "MCX" or "NSE" (without colon)
+            if prefix:
+                prefix = str(prefix).strip().upper()
+            
             # Store settings in result_dict
             result_dict[unique_key] = {
                 'Symbol': symbol,
                 'Expiry': expiry,
-                'FutureSymbol': future_symbol,  # Constructed future symbol
+                'FutureSymbol': future_symbol,  # Constructed future symbol (without exchange prefix)
                 'Timeframe': timeframe,
                 'StrikeStep': StrikeStep,
                 'StrikeNumber': StrikeNumber,
@@ -569,6 +567,9 @@ def get_user_settings():
                 'PyramidingNumber': PyramidingNumber,
                 'SLATR': SLATR,  # ATR period for initial SL calculation
                 'SLMULTIPLIER': SLMULTIPLIER,  # Multiplier for ATR in initial SL calculation
+                'StartTime': starttime,  # Trading start time for this symbol (e.g., "9:00" or "9:15:15")
+                'StopTime': stoptime,    # Trading stop time for this symbol (e.g., "15:30" or "23:30")
+                'Prefix': prefix,        # Fyers exchange prefix (e.g., "MCX" or "NSE") - used only for Fyers data, NOT for Zerodha orders
                 # Additional fields can be added here
                 'InstrumentToken': None,  # Will be populated when instrument is found
                 'Exchange': None,  # Will be populated when instrument is found
@@ -984,14 +985,10 @@ def process_historical_data(
                         pass
                 
                 if is_tz_aware:
-                    print("[Processing] Removing timezone from date column...")
-                    # Convert timezone-aware datetime to timezone-naive
-                    # Use tz_convert to UTC first, then remove timezone
-                    try:
-                        historical_df['date'] = historical_df['date'].dt.tz_convert('UTC').dt.tz_localize(None)
-                    except Exception:
-                        # Alternative: directly convert to naive
-                        historical_df['date'] = historical_df['date'].dt.tz_localize(None)
+                    print("[Processing] Removing timezone from date column (keeping IST clock time)...")
+                    # Drop timezone but keep the same clock time (e.g. 09:15 IST -> 09:15 naive).
+                    # Do NOT tz_convert to UTC first, or timestamps would show 03:45 instead of 09:15.
+                    historical_df['date'] = historical_df['date'].dt.tz_localize(None)
                 else:
                     # Ensure it's timezone-naive datetime
                     historical_df['date'] = pd.to_datetime(historical_df['date'])
@@ -1933,8 +1930,11 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
         prev_row = None
         prev_ha_close = None
         prev_ha_open = None
+        prev_prev_row = None
+        prev_prev_ha_close = None
+        prev_prev_ha_open = None
         if df.height >= 2:
-            prev_row = df.tail(2).row(0, named=True)  # Second to last row
+            prev_row = df.tail(2).row(0, named=True)  # Second to last row (candle that just closed = trigger candle for entry)
             prev_supertrend_trend = prev_row.get('supertrend_trend', None)
             prev_ha_close = prev_row.get('ha_close', None)
             prev_ha_open = prev_row.get('ha_open', None)
@@ -1942,13 +1942,24 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
             prev_supertrend_trend = None
             prev_ha_close = None
             prev_ha_open = None
+        if df.height >= 3:
+            prev_prev_row = df.tail(3).row(0, named=True)  # Candle before trigger (for "previous candle" color check on entry)
+            prev_prev_ha_close = prev_prev_row.get('ha_close', None)
+            prev_prev_ha_open = prev_prev_row.get('ha_open', None)
+        # Trigger candle (prev_row) values for entry and arming: we act on candle close, so conditions use the candle that just closed
+        prev_volume = prev_row.get('volume', None) if prev_row else None
+        prev_volume_ma = prev_row.get('VolumeMA', None) if prev_row else None
+        prev_kc2_upper = prev_row.get('KC2_upper', None) if prev_row else None
+        prev_kc2_lower = prev_row.get('KC2_lower', None) if prev_row else None
+        prev_kc1_upper = prev_row.get('KC1_upper', None) if prev_row else None
+        prev_kc1_lower = prev_row.get('KC1_lower', None) if prev_row else None
+        prev_ha_high = prev_row.get('ha_high', None) if prev_row else None
+        prev_ha_low = prev_row.get('ha_low', None) if prev_row else None
         
         # ========== EXIT CONDITIONS (Check first before entry) ==========
         current_position = trading_state.get('position', None)
         
-        # Get previous candle HA_Low and HA_High for SL check
-        prev_ha_low = prev_row.get('ha_low', None) if prev_row else None
-        prev_ha_high = prev_row.get('ha_high', None) if prev_row else None
+        # prev_ha_low, prev_ha_high already set above (trigger candle) for SL check
         
         # ========== STOP LOSS EXIT CHECK (Before Supertrend Exit) ==========
         if current_position is not None:
@@ -2048,7 +2059,8 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                             lotsize=lotsize,
                             stop_loss=current_sl,
                             entry_future_price=first_entry_price,
-                            entry_option_price=entry_option_price_initial
+                            entry_option_price=entry_option_price_initial,
+                            exit_type='SL Exit'
                         )
                     
                     # Log each pyramiding position exit to CSV (with their own exit prices)
@@ -2085,7 +2097,8 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                                 lotsize=lotsize,
                                 stop_loss=current_sl,
                                 entry_future_price=entry_future_price,
-                                entry_option_price=entry_option_price_pyr
+                                entry_option_price=entry_option_price_pyr,
+                                exit_type='SL Exit'
                             )
                     
                     # Detailed exit log
@@ -2250,7 +2263,8 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                             lotsize=lotsize,
                             stop_loss=current_sl,
                             entry_future_price=first_entry_price,
-                            entry_option_price=entry_option_price_initial
+                            entry_option_price=entry_option_price_initial,
+                            exit_type='SL Exit'
                         )
                     
                     # Log each pyramiding position exit to CSV (with their own exit prices)
@@ -2287,7 +2301,8 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                                 lotsize=lotsize,
                                 stop_loss=current_sl,
                                 entry_future_price=entry_future_price,
-                                entry_option_price=entry_option_price_pyr
+                                entry_option_price=entry_option_price_pyr,
+                                exit_type='SL Exit'
                             )
                     
                     # Detailed exit log
@@ -2455,7 +2470,8 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         lotsize=lotsize,
                         stop_loss=current_sl,
                         entry_future_price=first_entry_price,
-                        entry_option_price=entry_option_price_initial
+                        entry_option_price=entry_option_price_initial,
+                        exit_type='ST Exit'
                     )
                 
                 # Log each pyramiding position exit to CSV (with their own exit prices)
@@ -2492,7 +2508,8 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                             lotsize=lotsize,
                             stop_loss=current_sl,
                             entry_future_price=entry_future_price,
-                            entry_option_price=entry_option_price_pyr
+                            entry_option_price=entry_option_price_pyr,
+                            exit_type='ST Exit'
                         )
                 
                 # Detailed exit log
@@ -2669,7 +2686,8 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         lotsize=lotsize,
                         stop_loss=current_sl,
                         entry_future_price=first_entry_price,
-                        entry_option_price=entry_option_price_initial
+                        entry_option_price=entry_option_price_initial,
+                        exit_type='ST Exit'
                     )
                 
                 # Log each pyramiding position exit to CSV (with their own exit prices)
@@ -2706,7 +2724,8 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                             lotsize=lotsize,
                             stop_loss=current_sl,
                             entry_future_price=entry_future_price,
-                            entry_option_price=entry_option_price_pyr
+                            entry_option_price=entry_option_price_pyr,
+                            exit_type='ST Exit'
                         )
                 
                 # Detailed exit log
@@ -2784,105 +2803,104 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                 
                 # Continue to check for new entry conditions on same candle (don't return)
         
-        # ========== ARMED CONDITIONS (Can be set even when position exists) ==========
+        # ========== ARMED CONDITIONS (on candle close = trigger candle prev_row) ==========
         # ========== ARMED BUY CONDITION ==========
-        # Armed Buy: HA candle low < outer KC lower band (KC1_lower - outer band) - evaluated on candle close
-        if ha_low < kc1_lower:
+        # Armed Buy: trigger candle low < outer KC lower band (KC1_lower)
+        if prev_row is not None and prev_ha_low is not None and prev_kc1_lower is not None and prev_ha_low < prev_kc1_lower:
             if not trading_state.get('armed_buy', False):
                 trading_state['armed_buy'] = True
                 log_msg = (
                     f"ARMED BUY | Symbol: {future_symbol} | "
-                    f"HA_Low: {ha_low:.2f} < KC1_Lower (Outer): {kc1_lower:.2f} | "
-                    f"HA_Close: {ha_close:.2f} | Volume: {volume:.0f}"
+                    f"HA_Low: {prev_ha_low:.2f} < KC1_Lower (Outer): {prev_kc1_lower:.2f} | "
+                    f"HA_Close: {prev_ha_close:.2f} | Volume: {prev_volume:.0f}"
                 )
                 write_to_order_logs(log_msg)
                 # Log to CSV
                 write_to_signal_csv(
                     action='Armed Buy',
                     future_contract=future_symbol,
-                    future_price=ha_close
+                    future_price=prev_ha_close
                 )
         
         # ========== ARMED SELL CONDITION ==========
-        # Armed Sell: When BUY position exists, arm SELL if high >= outer KC upper band (KC1_upper - outer band) - evaluated on candle close
-        if current_position == 'BUY':
-            if ha_high >= kc1_upper:
+        # Armed Sell: trigger candle high >= outer KC upper band (KC1_upper)
+        if prev_row is not None and prev_ha_high is not None and prev_kc1_upper is not None and prev_ha_high >= prev_kc1_upper:
+            if current_position == 'BUY':
                 if not trading_state.get('armed_sell', False):
                     trading_state['armed_sell'] = True
                     log_msg = (
                         f"ARMED SELL | Symbol: {future_symbol} | "
-                        f"HA_High: {ha_high:.2f} >= KC1_Upper (Outer): {kc1_upper:.2f} | "
-                        f"HA_Close: {ha_close:.2f} | Volume: {volume:.0f} | "
+                        f"HA_High: {prev_ha_high:.2f} >= KC1_Upper (Outer): {prev_kc1_upper:.2f} | "
+                        f"HA_Close: {prev_ha_close:.2f} | Volume: {prev_volume:.0f} | "
                         f"Note: BUY position active, SELL entry will wait for BUY exit"
                     )
                     write_to_order_logs(log_msg)
-                    # Log to CSV
                     write_to_signal_csv(
                         action='Armed Sell',
                         future_contract=future_symbol,
-                        future_price=ha_close
+                        future_price=prev_ha_close
                     )
-        else:
-            # If no position, arm SELL when high >= outer KC upper band (KC1_upper - outer band) - evaluated on candle close
-            if ha_high >= kc1_upper:
+            else:
                 if not trading_state.get('armed_sell', False):
                     trading_state['armed_sell'] = True
                     log_msg = (
                         f"ARMED SELL | Symbol: {future_symbol} | "
-                        f"HA_High: {ha_high:.2f} >= KC1_Upper (Outer): {kc1_upper:.2f} | "
-                        f"HA_Close: {ha_close:.2f} | Volume: {volume:.0f}"
+                        f"HA_High: {prev_ha_high:.2f} >= KC1_Upper (Outer): {prev_kc1_upper:.2f} | "
+                        f"HA_Close: {prev_ha_close:.2f} | Volume: {prev_volume:.0f}"
                     )
                     write_to_order_logs(log_msg)
-                    # Log to CSV
                     write_to_signal_csv(
                         action='Armed Sell',
                         future_contract=future_symbol,
-                        future_price=ha_close
+                        future_price=prev_ha_close
                     )
         
         # ========== ARMED BUY RESET ==========
-        # Reset Armed Buy: candle's high > both upper Keltner bands
-        if ha_high > kc1_upper and ha_high > kc2_upper:
-            if trading_state.get('armed_buy', False):
-                trading_state['armed_buy'] = False
-                log_msg = (
-                    f"ARMED BUY RESET | Symbol: {future_symbol} | "
-                    f"HA_High: {ha_high:.2f} > KC1_Upper: {kc1_upper:.2f} AND KC2_Upper: {kc2_upper:.2f}"
-                )
-                write_to_order_logs(log_msg)
+        # Reset Armed Buy: trigger candle high > both upper Keltner bands
+        if prev_row is not None and prev_ha_high is not None and prev_kc1_upper is not None and prev_kc2_upper is not None:
+            if prev_ha_high > prev_kc1_upper and prev_ha_high > prev_kc2_upper:
+                if trading_state.get('armed_buy', False):
+                    trading_state['armed_buy'] = False
+                    log_msg = (
+                        f"ARMED BUY RESET | Symbol: {future_symbol} | "
+                        f"HA_High: {prev_ha_high:.2f} > KC1_Upper: {prev_kc1_upper:.2f} AND KC2_Upper: {prev_kc2_upper:.2f}"
+                    )
+                    write_to_order_logs(log_msg)
         
         # ========== ARMED SELL RESET ==========
-        # Reset Armed Sell: candle's low < both lower Keltner bands
-        if ha_low < kc1_lower and ha_low < kc2_lower:
-            if trading_state.get('armed_sell', False):
-                trading_state['armed_sell'] = False
-                log_msg = (
-                    f"ARMED SELL RESET | Symbol: {future_symbol} | "
-                    f"HA_Low: {ha_low:.2f} < KC1_Lower: {kc1_lower:.2f} AND KC2_Lower: {kc2_lower:.2f}"
-                )
-                write_to_order_logs(log_msg)
+        # Reset Armed Sell: trigger candle low < both lower Keltner bands
+        if prev_row is not None and prev_ha_low is not None and prev_kc1_lower is not None and prev_kc2_lower is not None:
+            if prev_ha_low < prev_kc1_lower and prev_ha_low < prev_kc2_lower:
+                if trading_state.get('armed_sell', False):
+                    trading_state['armed_sell'] = False
+                    log_msg = (
+                        f"ARMED SELL RESET | Symbol: {future_symbol} | "
+                        f"HA_Low: {prev_ha_low:.2f} < KC1_Lower: {prev_kc1_lower:.2f} AND KC2_Lower: {prev_kc2_lower:.2f}"
+                    )
+                    write_to_order_logs(log_msg)
         
         # ========== ENTRY CONDITIONS (Only if no position) ==========
         # If position exists, silently skip entry (no log, no order)
         if current_position is None:
             
             # ========== BUY ENTRY ==========
-            # Buy Entry: Armed Buy AND any candle close > inner KC lower band (KC2_lower - inner band) AND volume > VolumeMA
-            # AND previous HA candle must be GREEN (prev_ha_close > prev_ha_open)
+            # We act on candle close: entry conditions are evaluated on the candle that just closed (prev_row = trigger candle).
+            # Buy Entry: Armed Buy AND trigger candle close > KC2_lower AND trigger volume > VolumeMA
+            # AND candle before trigger must be GREEN (prev_prev_ha_close > prev_prev_ha_open)
             if trading_state.get('armed_buy', False):
-                if ha_close > kc2_lower:
-                    if volume_ma is not None and volume > volume_ma:
-                        # Check if previous HA candle is GREEN (ha_close > ha_open)
+                if prev_ha_close is not None and prev_kc2_lower is not None and prev_ha_close > prev_kc2_lower:
+                    if prev_volume_ma is not None and prev_volume is not None and prev_volume > prev_volume_ma:
+                        # Check if candle before trigger is GREEN (prev_prev)
                         prev_candle_green = False
-                        if prev_ha_close is not None and prev_ha_open is not None:
-                            prev_candle_green = prev_ha_close > prev_ha_open
+                        if prev_prev_ha_close is not None and prev_prev_ha_open is not None:
+                            prev_candle_green = prev_prev_ha_close > prev_prev_ha_open
                         else:
-                            # If previous candle not available, skip entry
-                            print(f"[Buy Entry] Previous HA candle data not available, skipping entry")
+                            # If candle before trigger not available, skip entry
+                            print(f"[Buy Entry] Candle before trigger not available, skipping entry")
                             return
                         
                         if not prev_candle_green:
-                            print(f"[Buy Entry] Previous HA candle is RED (Close: {prev_ha_close:.2f} <= Open: {prev_ha_open:.2f}), skipping entry")
+                            print(f"[Buy Entry] Candle before trigger is RED (Close: {prev_prev_ha_close:.2f} <= Open: {prev_prev_ha_open:.2f}), skipping entry")
                             return
                         # Get settings for delta-based option selection
                         params = result_dict.get(unique_key, {})
@@ -2903,10 +2921,10 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         if underlying_exchange:
                             ltp = get_ltp(kite_client, underlying_exchange, future_symbol)
                         
-                        # If LTP not available, use ha_close as approximation
+                        # If LTP not available, use trigger candle close (prev_ha_close) as approximation
                         if not ltp:
-                            ltp = ha_close
-                            print(f"[Buy Entry] LTP not available for {future_symbol}, using HA_Close: {ltp:.2f}")
+                            ltp = prev_ha_close
+                            print(f"[Buy Entry] LTP not available for {future_symbol}, using trigger candle HA_Close: {ltp:.2f}")
                         
                         # Normalize strike and create strike list
                         atm = normalize_strike(ltp, strike_step)
@@ -3006,10 +3024,10 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                             trading_state['option_symbol'] = selected_option['option_symbol']
                             trading_state['option_exchange'] = option_exchange
                         
-                        # Initialize pyramiding fields for first entry
+                        # Initialize pyramiding fields for first entry (use trigger candle close)
                         trading_state['pyramiding_count'] = 1
-                        trading_state['first_entry_price'] = ha_close  # Use HA close as entry price (future price)
-                        trading_state['last_pyramiding_price'] = ha_close  # Initialize for pyramiding calculation
+                        trading_state['first_entry_price'] = prev_ha_close  # Trigger candle HA close
+                        trading_state['last_pyramiding_price'] = prev_ha_close  # Initialize for pyramiding calculation
                         trading_state['pyramiding_positions'] = []  # Only actual pyramiding positions go here, NOT the initial position
                         
                         # Store entry option price for initial position
@@ -3023,7 +3041,7 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         if initial_sl is not None:
                             trading_state['initial_sl'] = initial_sl
                             trading_state['current_sl'] = initial_sl  # Initially, current_sl = initial_sl
-                            trading_state['entry_prices'] = [ha_close]  # Track all entry prices for averaging
+                            trading_state['entry_prices'] = [prev_ha_close]  # Trigger candle close
                             write_to_order_logs(f"INITIAL SL CALCULATED | BUY Position | Initial SL: {initial_sl:.2f} (Lowest Low of last 5 candles - ATR {sl_atr_period} × {sl_multiplier})")
                         else:
                             write_to_order_logs(f"WARNING: Could not calculate initial SL for BUY position")
@@ -3038,7 +3056,7 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                                 option_price=option_price if option_price else 0,
                                 option_contract=selected_option['option_symbol'],
                                 future_contract=future_symbol,
-                                future_price=ha_close,
+                                future_price=prev_ha_close,
                                 lotsize=lotsize,
                                 stop_loss=None  # Empty for entries
                             )
@@ -3046,12 +3064,12 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         # Keep armed_buy = True to allow re-entry after exit if conditions still met
                         save_trading_state()  # Save state after position change
                         
-                        # Build log message
+                        # Build log message (trigger candle = prev_row)
                         log_msg = (
                             f"BUY ENTRY | Symbol: {future_symbol} | "
-                            f"Price: {ha_close:.2f} | Volume: {volume:.0f} > VolumeMA: {volume_ma:.0f} | "
-                            f"HA_Close: {ha_close:.2f} > KC1_Lower: {kc1_lower:.2f} AND KC2_Lower: {kc2_lower:.2f} | "
-                            f"HA_High: {ha_high:.2f} | HA_Low: {ha_low:.2f} | "
+                            f"Trigger Candle Close: {prev_ha_close:.2f} | Volume: {prev_volume:.0f} > VolumeMA: {prev_volume_ma:.0f} | "
+                            f"HA_Close: {prev_ha_close:.2f} > KC2_Lower: {prev_kc2_lower:.2f} | "
+                            f"Prev Candle (color): HA_High: {prev_row.get('ha_high')} | HA_Low: {prev_row.get('ha_low')} | "
                             f"KC1_Upper: {kc1_upper:.2f} | KC1_Lower: {kc1_lower:.2f} | "
                             f"KC2_Upper: {kc2_upper:.2f} | KC2_Lower: {kc2_lower:.2f} | "
                             f"Supertrend: {supertrend_trend} | Supertrend_Value: {supertrend:.2f}"
@@ -3076,23 +3094,23 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         write_to_order_logs(log_msg)
             
             # ========== SELL ENTRY ==========
-            # Sell Entry: Armed Sell AND current candle close < inner KC upper band (KC2_upper - inner band) AND volume > VolumeMA
-            # AND previous HA candle must be RED (prev_ha_close < prev_ha_open)
+            # We act on candle close: entry conditions are evaluated on the candle that just closed (prev_row = trigger candle).
+            # Sell Entry: Armed Sell AND trigger candle close < KC2_upper AND trigger volume > VolumeMA
+            # AND candle before trigger must be RED (prev_prev_ha_close < prev_prev_ha_open)
             if trading_state.get('armed_sell', False):
-                # Use current candle close for SELL entry check
-                if ha_close < kc2_upper:
-                    if volume_ma is not None and volume > volume_ma:
-                        # Check if previous HA candle is RED (ha_close < ha_open)
+                if prev_ha_close is not None and prev_kc2_upper is not None and prev_ha_close < prev_kc2_upper:
+                    if prev_volume_ma is not None and prev_volume is not None and prev_volume > prev_volume_ma:
+                        # Check if candle before trigger is RED (prev_prev)
                         prev_candle_red = False
-                        if prev_ha_close is not None and prev_ha_open is not None:
-                            prev_candle_red = prev_ha_close < prev_ha_open
+                        if prev_prev_ha_close is not None and prev_prev_ha_open is not None:
+                            prev_candle_red = prev_prev_ha_close < prev_prev_ha_open
                         else:
-                            # If previous candle not available, skip entry
-                            print(f"[Sell Entry] Previous HA candle data not available, skipping entry")
+                            # If candle before trigger not available, skip entry
+                            print(f"[Sell Entry] Candle before trigger not available, skipping entry")
                             return
                         
                         if not prev_candle_red:
-                            print(f"[Sell Entry] Previous HA candle is GREEN (Close: {prev_ha_close:.2f} >= Open: {prev_ha_open:.2f}), skipping entry")
+                            print(f"[Sell Entry] Candle before trigger is GREEN (Close: {prev_prev_ha_close:.2f} >= Open: {prev_prev_ha_open:.2f}), skipping entry")
                             return
                         # Get settings for delta-based option selection
                         params = result_dict.get(unique_key, {})
@@ -3113,10 +3131,10 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         if underlying_exchange:
                             ltp = get_ltp(kite_client, underlying_exchange, future_symbol)
                         
-                        # If LTP not available, use ha_close as approximation
+                        # If LTP not available, use trigger candle close (prev_ha_close) as approximation
                         if not ltp:
-                            ltp = ha_close
-                            print(f"[Sell Entry] LTP not available for {future_symbol}, using HA_Close: {ltp:.2f}")
+                            ltp = prev_ha_close
+                            print(f"[Sell Entry] LTP not available for {future_symbol}, using trigger candle HA_Close: {ltp:.2f}")
                         
                         # Normalize strike and create strike list
                         atm = normalize_strike(ltp, strike_step)
@@ -3225,7 +3243,7 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                             option_price=csv_option_price,
                             option_contract=csv_option_contract,
                             future_contract=future_symbol,
-                            future_price=ha_close,
+                            future_price=prev_ha_close,
                             lotsize=lotsize,
                             stop_loss=None  # Empty for entries
                         )
@@ -3237,10 +3255,10 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                             trading_state['option_symbol'] = selected_option['option_symbol']
                             trading_state['option_exchange'] = option_exchange
                         
-                        # Initialize pyramiding fields for first entry
+                        # Initialize pyramiding fields for first entry (use trigger candle close)
                         trading_state['pyramiding_count'] = 1
-                        trading_state['first_entry_price'] = ha_close  # Use HA close as entry price (future price)
-                        trading_state['last_pyramiding_price'] = ha_close  # Initialize for pyramiding calculation
+                        trading_state['first_entry_price'] = prev_ha_close  # Trigger candle HA close
+                        trading_state['last_pyramiding_price'] = prev_ha_close  # Initialize for pyramiding calculation
                         trading_state['pyramiding_positions'] = []  # Only actual pyramiding positions go here, NOT the initial position
                         
                         # Store entry option price for initial position
@@ -3254,7 +3272,7 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         if initial_sl is not None:
                             trading_state['initial_sl'] = initial_sl
                             trading_state['current_sl'] = initial_sl  # Initially, current_sl = initial_sl
-                            trading_state['entry_prices'] = [ha_close]  # Track all entry prices for averaging
+                            trading_state['entry_prices'] = [prev_ha_close]  # Trigger candle close
                             write_to_order_logs(f"INITIAL SL CALCULATED | SELL Position | Initial SL: {initial_sl:.2f} (Highest High of last 5 candles + ATR {sl_atr_period} × {sl_multiplier})")
                         else:
                             write_to_order_logs(f"WARNING: Could not calculate initial SL for SELL position")
@@ -3262,12 +3280,12 @@ def execute_trading_strategy(df: pl.DataFrame, unique_key: str, symbol: str, fut
                         # Keep armed_sell = True to allow re-entry after exit if conditions still met
                         save_trading_state()  # Save state after position change
                         
-                        # Build log message
+                        # Build log message (trigger candle = prev_row)
                         log_msg = (
                             f"SELL ENTRY | Symbol: {future_symbol} | "
-                            f"Price: {ha_close:.2f} | Volume: {volume:.0f} > VolumeMA: {volume_ma:.0f} | "
-                            f"HA_Close: {ha_close:.2f} < KC1_Upper: {kc1_upper:.2f} AND KC2_Upper: {kc2_upper:.2f} | "
-                            f"HA_High: {ha_high:.2f} | HA_Low: {ha_low:.2f} | "
+                            f"Trigger Candle Close: {prev_ha_close:.2f} | Volume: {prev_volume:.0f} > VolumeMA: {prev_volume_ma:.0f} | "
+                            f"HA_Close: {prev_ha_close:.2f} < KC2_Upper: {prev_kc2_upper:.2f} | "
+                            f"Prev Candle (color): HA_High: {prev_row.get('ha_high')} | HA_Low: {prev_row.get('ha_low')} | "
                             f"KC1_Upper: {kc1_upper:.2f} | KC1_Lower: {kc1_lower:.2f} | "
                             f"KC2_Upper: {kc2_upper:.2f} | KC2_Lower: {kc2_lower:.2f} | "
                             f"Supertrend: {supertrend_trend} | Supertrend_Value: {supertrend:.2f}"
@@ -3873,8 +3891,8 @@ if __name__ == "__main__":
         get_user_settings()
         print("[Main] User settings loaded successfully!")
         
-        # Step 3.5: Initialize/verify signal.csv file
-        print("\n[Main] Initializing signal.csv file...")
+        # Step 3.5: Initialize per-symbol signal CSV files (e.g. crudeoilsignal.csv, bankniftysignal.csv)
+        print("\n[Main] Initializing per-symbol signal CSV files...")
         initialize_signal_csv()
 
         # Step 4: Get timeframe for scheduling

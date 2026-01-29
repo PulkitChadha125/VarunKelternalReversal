@@ -1,0 +1,7 @@
+[2026-01-29 14:29:05] Fyers auto‑login performed at 9:00 AM
+[2026-01-29 14:29:05] Zerodha auto‑login performed at 9:00 AM
+[2026-01-29 14:29:14] ARMED SELL | Symbol: CRUDEOIL26FEBFUT | HA_High: 5961.00 >= KC1_Upper (Outer): 5956.32 | HA_Close: 5960.00 | Volume: 4
+[2026-01-29 14:36:02] ARMED BUY | Symbol: NATURALGAS26FEBFUT | HA_Low: 350.70 < KC1_Lower (Outer): 350.88 | HA_Close: 350.70 | Volume: 0
+[2026-01-29 15:11:02] ARMED SELL | Symbol: GOLD26FEBFUT | HA_High: 176462.00 >= KC1_Upper (Outer): 176404.47 | HA_Close: 176462.00 | Volume: 0
+[2026-01-29 19:22:02] ARMED BUY | Symbol: GOLD26FEBFUT | HA_Low: 175170.00 < KC1_Lower (Outer): 175266.12 | HA_Close: 175170.00 | Volume: 0
+[2026-01-29 19:22:02] ARMED SELL RESET | Symbol: GOLD26FEBFUT | HA_Low: 175170.00 < KC1_Lower: 175266.12 AND KC2_Lower: 175567.25

@@ -1,8 +1,9 @@
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 import time
 import traceback
 from pathlib import Path
+import os
 
 from kiteconnect import KiteConnect
 
@@ -95,14 +96,51 @@ def get_ltp_fyers_adapter(_kite: KiteConnect, _exchange: str, symbol: str) -> fl
     - Ignores Kite client and exchange.
     - Uses FyersIntegration.get_ltp(symbol) instead.
     - Expects symbol in base futures format, e.g. CRUDEOIL26JANFUT.
-      We add the correct Fyers exchange prefix here (e.g. MCX:).
+      We add the correct Fyers exchange prefix from TradeSettings (PREFIX column).
+    
+    Note: This is called from within execute_trading_strategy, so we need to find
+    the prefix from the current symbol's settings. We'll search result_dict to find
+    the matching symbol and get its prefix.
     """
     try:
-        # If symbol does not have an exchange prefix, assume MCX for CRUDEOIL
-        fyers_symbol = symbol
-        if ":" not in fyers_symbol:
-            # For now we treat all unprefixed futures as MCX; can be extended per-symbol later
-            fyers_symbol = f"MCX:{fyers_symbol}"
+        # If symbol already has exchange prefix, use it
+        if ":" in symbol:
+            fyers_symbol = symbol
+        else:
+            # Try to find prefix from TradeSettings by matching the symbol
+            prefix_found = None
+            for unique_key, params in strat.result_dict.items():
+                # Check if this symbol matches (could be future_symbol or base symbol)
+                future_sym = params.get("FutureSymbol", "")
+                base_sym = params.get("Symbol", "")
+                
+                if symbol == future_sym or symbol.startswith(base_sym):
+                    prefix_found = params.get("Prefix", None)
+                    if prefix_found:
+                        break
+            
+            if prefix_found:
+                # Use prefix from TradeSettings.csv
+                prefix_upper = str(prefix_found).strip().upper()
+                fyers_symbol = f"{prefix_upper}:{symbol}"
+            else:
+                # Fallback: auto-detect prefix (backward compatibility)
+                # Extract base symbol from future symbol
+                base_symbol = symbol
+                if symbol.endswith("FUT"):
+                    for known_symbol in ["CRUDEOIL", "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", 
+                                        "GOLD", "SILVER", "NATURALGAS", "COPPER"]:
+                        if symbol.startswith(known_symbol):
+                            base_symbol = known_symbol
+                            break
+                    else:
+                        import re
+                        match = re.match(r"^([A-Z]+)", symbol)
+                        if match:
+                            base_symbol = match.group(1)
+                
+                exchange_prefix = get_fyers_exchange_prefix(base_symbol)
+                fyers_symbol = f"{exchange_prefix}{symbol}"
 
         ltp = fyers_get_ltp(fyers_symbol)
         if ltp is None:
@@ -114,8 +152,188 @@ def get_ltp_fyers_adapter(_kite: KiteConnect, _exchange: str, symbol: str) -> fl
         return None
 
 
+# ============================================================
+# Helper: Determine Fyers exchange prefix based on symbol
+# ============================================================
+
+def get_fyers_exchange_prefix(symbol: str) -> str:
+    """
+    Determine the correct Fyers exchange prefix for a symbol.
+    
+    Rules:
+    - CRUDEOIL and other commodities → "MCX:"
+    - NIFTY, BANKNIFTY and other indices → "NSE:" (futures) or "NFO:" (options)
+    - Default: "MCX:" if unknown
+    
+    Args:
+        symbol: Base symbol (e.g., "CRUDEOIL", "NIFTY", "BANKNIFTY")
+    
+    Returns:
+        Exchange prefix string (e.g., "MCX:", "NSE:")
+    """
+    symbol_upper = symbol.upper()
+    
+    # NSE/NFO symbols (indices)
+    if symbol_upper in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
+        # For futures, use NSE:; for options, would be NFO: but we're dealing with futures here
+        return "NSE:"
+    
+    # MCX symbols (commodities)
+    if symbol_upper in ["CRUDEOIL", "GOLD", "SILVER", "NATURALGAS", "COPPER", "ZINC", "LEAD", "ALUMINIUM", "NICKEL"]:
+        return "MCX:"
+    
+    # Default to MCX for unknown symbols (safer for commodities)
+    print(f"[Fyers Exchange] Unknown symbol '{symbol}', defaulting to MCX:")
+    return "MCX:"
+
+
 # Monkey‑patch the strategy module's get_ltp to use Fyers instead of Zerodha.
 strat.get_ltp = get_ltp_fyers_adapter
+
+
+# ============================================================
+# Per-symbol trading hours validation
+# ============================================================
+
+def parse_time_string(time_str):
+    """
+    Parse time string in formats: "HH:MM" or "HH:MM:SS"
+    
+    Args:
+        time_str: Time string (e.g., "9:00", "9:15:15", "15:30", "23:30:00")
+    
+    Returns:
+        datetime.time object, or None if invalid
+    """
+    if not time_str or pd.isna(time_str) or str(time_str).strip() == '':
+        return None
+    
+    try:
+        time_str = str(time_str).strip()
+        parts = time_str.split(':')
+        
+        if len(parts) == 2:
+            # Format: "HH:MM"
+            hour = int(parts[0])
+            minute = int(parts[1])
+            return dt_time(hour, minute)
+        elif len(parts) == 3:
+            # Format: "HH:MM:SS"
+            hour = int(parts[0])
+            minute = int(parts[1])
+            second = int(parts[2])
+            return dt_time(hour, minute, second)
+        else:
+            print(f"[Time Parse] Invalid time format: {time_str}")
+            return None
+    except (ValueError, IndexError) as e:
+        print(f"[Time Parse] Error parsing time '{time_str}': {e}")
+        return None
+
+
+def is_symbol_trading_hours(starttime_str, stoptime_str) -> bool:
+    """
+    Check if current time is within symbol-specific trading hours.
+    
+    Args:
+        starttime_str: Start time string from TradeSettings (e.g., "9:00", "9:15:15")
+        stoptime_str: Stop time string from TradeSettings (e.g., "15:30", "23:30")
+    
+    Returns:
+        True if within trading hours, False otherwise
+        If times are not provided, returns True (no restriction)
+    """
+    now = datetime.now()
+    current_time = now.time()
+    
+    # Parse start and stop times
+    start_time = parse_time_string(starttime_str)
+    stop_time = parse_time_string(stoptime_str)
+    
+    # If no times provided, allow trading (backward compatibility)
+    if start_time is None and stop_time is None:
+        return True
+    
+    # If only one time provided, use default for the other
+    if start_time is None:
+        start_time = dt_time(9, 0)  # Default: 9:00 AM
+    if stop_time is None:
+        stop_time = dt_time(23, 30)  # Default: 11:30 PM
+    
+    # Check if current time is within range
+    # Handle case where stop time is before start time (e.g., overnight trading)
+    if stop_time >= start_time:
+        # Normal case: start_time <= current_time <= stop_time
+        return start_time <= current_time <= stop_time
+    else:
+        # Overnight case: start_time <= current_time OR current_time <= stop_time
+        # Example: 23:30 to 9:00 (overnight)
+        return current_time >= start_time or current_time <= stop_time
+
+
+# ============================================================
+# Trading hours configuration (global - for backward compatibility)
+# ============================================================
+
+# ===== CONFIGURATION: Adjust these times as needed =====
+# Market open time (24-hour format: hour, minute)
+MARKET_OPEN_HOUR = 9
+MARKET_OPEN_MINUTE = 0  # 9:00 AM
+
+# Market close time (24-hour format: hour, minute)
+# Options:
+#   - For NSE/NFO only: 15, 30  (3:30 PM)
+#   - For MCX commodities: 23, 30  (11:30 PM)
+#   - For both (current): 23, 30  (11:30 PM)
+MARKET_CLOSE_HOUR = 23
+MARKET_CLOSE_MINUTE = 30  # 11:30 PM (change to 15, 30 for 3:30 PM NSE hours)
+# ============================================================
+
+def is_trading_hours() -> bool:
+    """
+    Check if current time is within trading hours.
+    
+    Trading hours are configured via MARKET_OPEN_* and MARKET_CLOSE_* constants above.
+    
+    Default:
+    - Market Open: 9:00 AM IST
+    - Market Close: 11:30 PM IST (for MCX commodities)
+    
+    To change to NSE hours only (3:30 PM), set:
+    - MARKET_CLOSE_HOUR = 15
+    - MARKET_CLOSE_MINUTE = 30
+    
+    Returns:
+        True if within trading hours, False otherwise
+    """
+    now = datetime.now()
+    current_time = now.time()
+    
+    market_open = dt_time(MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE)
+    market_close = dt_time(MARKET_CLOSE_HOUR, MARKET_CLOSE_MINUTE)
+    
+    return market_open <= current_time <= market_close
+
+
+def should_skip_trading() -> bool:
+    """
+    Determine if trading should be skipped (outside market hours or weekends).
+    
+    Returns:
+        True if should skip trading, False if should proceed
+    """
+    now = datetime.now()
+    weekday = now.weekday()  # 0 = Monday, 6 = Sunday
+    
+    # Skip weekends (Saturday = 5, Sunday = 6)
+    if weekday >= 5:
+        return True
+    
+    # Check trading hours
+    if not is_trading_hours():
+        return True
+    
+    return False
 
 
 # ============================================================
@@ -142,12 +360,26 @@ def main_strategy_fyers_zerodha():
             symbol = params.get("Symbol")
             future_symbol = params.get("FutureSymbol")  # e.g. CRUDEOIL25NOVFUT, BANKNIFTY26JANFUT
             timeframe = params.get("Timeframe")
+            
+            # Get symbol-specific trading hours
+            starttime = params.get("StartTime", None)
+            stoptime = params.get("StopTime", None)
 
             if not future_symbol or not timeframe:
                 print(f"[Strategy Fyers/Zerodha] Missing FutureSymbol or Timeframe for {unique_key}")
                 continue
 
+            # Check if current time is within symbol's trading hours
+            if not is_symbol_trading_hours(starttime, stoptime):
+                current_time_str = datetime.now().strftime("%H:%M:%S")
+                start_str = starttime if starttime else "N/A"
+                stop_str = stoptime if stoptime else "N/A"
+                print(f"[Strategy Fyers/Zerodha] Skipping {symbol} - Outside trading hours. Current: {current_time_str}, Trading Hours: {start_str} - {stop_str}")
+                continue
+
             print(f"\n[Strategy Fyers/Zerodha] Processing {symbol} -> {future_symbol} with timeframe {timeframe}")
+            if starttime or stoptime:
+                print(f"[Strategy Fyers/Zerodha] Symbol trading hours: {starttime or 'N/A'} - {stoptime or 'N/A'}")
 
             # ---------------------------------------------
             # 3.1 Fetch historical futures data from Fyers
@@ -156,25 +388,81 @@ def main_strategy_fyers_zerodha():
             timeframe_minutes = strat.get_timeframe_minutes(timeframe)
             fyers_resolution = str(timeframe_minutes)
 
-            try:
-                # Fyers fetchOHLC expects symbol and resolution string
-                # For CRUDEOIL futures, use MCX prefix as per your format: MCX:CRUDEOIL26JANFUT
-                fyers_symbol = future_symbol
-                if ":" not in fyers_symbol:
-                    fyers_symbol = f"MCX:{fyers_symbol}"
+            # ---------------------------------------------
+            # 3.1 Fetch historical futures data from Fyers (with retry logic)
+            # ---------------------------------------------
+            historical_df = None
+            max_fyers_retries = 3
+            fyers_retry_delay = 2
+            
+            for retry_attempt in range(max_fyers_retries):
+                try:
+                    # Get Fyers exchange prefix from TradeSettings (PREFIX column)
+                    # If prefix is provided in CSV, use it; otherwise fall back to auto-detection
+                    prefix_from_csv = params.get("Prefix", None)
+                    
+                    if ":" in future_symbol:
+                        # Already has prefix, use as-is
+                        fyers_symbol = future_symbol
+                    elif prefix_from_csv:
+                        # Use prefix from TradeSettings.csv (e.g., "MCX" -> "MCX:")
+                        prefix_upper = str(prefix_from_csv).strip().upper()
+                        fyers_symbol = f"{prefix_upper}:{future_symbol}"
+                        print(f"[Strategy Fyers/Zerodha] Using prefix from TradeSettings: {prefix_upper}")
+                    else:
+                        # Fallback: auto-detect prefix based on symbol (backward compatibility)
+                        base_symbol = symbol
+                        exchange_prefix = get_fyers_exchange_prefix(base_symbol)
+                        fyers_symbol = f"{exchange_prefix}{future_symbol}"
+                        print(f"[Strategy Fyers/Zerodha] Auto-detected prefix: {exchange_prefix}")
 
-                print(f"symbol: {fyers_symbol}")
-                historical_df = fyers_fetch_ohlc(fyers_symbol, fyers_resolution)
-            except Exception as e:
-                print(f"[Strategy Fyers/Zerodha] Error fetching Fyers data for {future_symbol}: {e}")
-                traceback.print_exc()
-                continue
-
+                    print(f"[Strategy Fyers/Zerodha] Fetching data for {fyers_symbol} (attempt {retry_attempt + 1}/{max_fyers_retries})")
+                    historical_df = fyers_fetch_ohlc(fyers_symbol, fyers_resolution)
+                    
+                    # Validate data quality
+                    if historical_df is not None and not historical_df.empty:
+                        # Check minimum required candles (at least 100 for indicator calculations)
+                        min_required_candles = 100
+                        if len(historical_df) < min_required_candles:
+                            print(f"[Strategy Fyers/Zerodha] WARNING: Only {len(historical_df)} candles retrieved, minimum {min_required_candles} required for reliable indicators")
+                            # Continue anyway but log warning
+                        else:
+                            print(f"[Strategy Fyers/Zerodha] Retrieved {len(historical_df)} candles from Fyers for {future_symbol}")
+                            break  # Success, exit retry loop
+                    else:
+                        if retry_attempt < max_fyers_retries - 1:
+                            print(f"[Strategy Fyers/Zerodha] Empty data returned, retrying in {fyers_retry_delay} seconds...")
+                            time.sleep(fyers_retry_delay)
+                        else:
+                            print(f"[Strategy Fyers/Zerodha] No historical data retrieved from Fyers for {future_symbol} after {max_fyers_retries} attempts")
+                            continue  # Skip to next symbol
+                            
+                except Exception as e:
+                    error_msg = str(e)
+                    print(f"[Strategy Fyers/Zerodha] Error fetching Fyers data for {future_symbol} (attempt {retry_attempt + 1}/{max_fyers_retries}): {e}")
+                    
+                    # Check for session/auth errors
+                    if "token" in error_msg.lower() or "auth" in error_msg.lower() or "session" in error_msg.lower():
+                        print(f"[Strategy Fyers/Zerodha] Possible Fyers session expired, attempting re-login...")
+                        try:
+                            fyers_login()
+                            print(f"[Strategy Fyers/Zerodha] Fyers re-login successful, retrying data fetch...")
+                        except Exception as login_error:
+                            print(f"[Strategy Fyers/Zerodha] Fyers re-login failed: {login_error}")
+                            strat.write_to_order_logs(f"ERROR: Fyers re-login failed during data fetch: {login_error}")
+                    
+                    if retry_attempt < max_fyers_retries - 1:
+                        print(f"[Strategy Fyers/Zerodha] Retrying in {fyers_retry_delay} seconds...")
+                        time.sleep(fyers_retry_delay)
+                    else:
+                        print(f"[Strategy Fyers/Zerodha] Failed to fetch data after {max_fyers_retries} attempts")
+                        traceback.print_exc()
+                        continue  # Skip to next symbol
+            
+            # Final validation before processing
             if historical_df is None or historical_df.empty:
-                print(f"[Strategy Fyers/Zerodha] No historical data retrieved from Fyers for {future_symbol}")
+                print(f"[Strategy Fyers/Zerodha] Skipping {future_symbol} - no valid data retrieved")
                 continue
-
-            print(f"[Strategy Fyers/Zerodha] Retrieved {len(historical_df)} candles from Fyers for {future_symbol}")
 
             # ---------------------------------------------
             # 3.2 Indicator parameters from TradeSettings
@@ -214,15 +502,32 @@ def main_strategy_fyers_zerodha():
                 traceback.print_exc()
                 continue
 
-            # Optionally save to CSV for inspection (same as original strategy)
+            # Save processed data to symbol-specific file in data folder
             try:
-                output_file = "data.csv"
+                # Create data folder if it doesn't exist
+                data_folder = Path("data")
+                data_folder.mkdir(exist_ok=True)
+                
+                # Create filename based on symbol and expiry
+                # Format: data/{SYMBOL}_{EXPIRY}.csv
+                # Example: data/CRUDEOIL_26-01-2026.csv
+                expiry = params.get("Expiry", "")
+                if expiry:
+                    # Clean expiry for filename (replace / with -)
+                    expiry_clean = expiry.replace("/", "-")
+                    filename = f"{symbol}_{expiry_clean}.csv"
+                else:
+                    # Fallback to unique_key if expiry not available
+                    filename = f"{unique_key.replace('_', '-')}.csv"
+                
+                output_file = data_folder / filename
+                
                 print(f"[Strategy Fyers/Zerodha] Saving processed data to {output_file}...")
                 max_retries = 3
                 retry_delay = 1
                 for attempt in range(max_retries):
                     try:
-                        processed_df.write_csv(output_file)
+                        processed_df.write_csv(str(output_file))
                         print(f"[Strategy Fyers/Zerodha] Data saved successfully to {output_file}")
                         break
                     except OSError as e:
@@ -238,9 +543,10 @@ def main_strategy_fyers_zerodha():
                                 "[Strategy Fyers/Zerodha] Please close the file if it's open in Excel or another program."
                             )
                             break
-            except Exception:
-                # Non‑critical, ignore CSV save errors
-                pass
+            except Exception as e:
+                print(f"[Strategy Fyers/Zerodha] Error saving data file: {e}")
+                traceback.print_exc()
+                # Non‑critical, continue even if save fails
 
             # ---------------------------------------------
             # 3.4 Initialize / ensure trading state structure
@@ -322,16 +628,30 @@ if __name__ == "__main__":
         strat.load_trading_state()
 
         # 4.2 Login to Fyers (data) and Zerodha (execution)
-        fyers_login()
-        strat.kite_client = strat.zerodha_login()
+        print("\n[Main Fyers/Zerodha] Logging in to brokers...")
+        try:
+            fyers_login()
+            print("[Main Fyers/Zerodha] Fyers login successful")
+        except Exception as e:
+            print(f"[Main Fyers/Zerodha] CRITICAL: Fyers login failed: {e}")
+            strat.write_to_order_logs(f"CRITICAL ERROR: Fyers login failed at startup: {e}")
+            raise  # Cannot proceed without Fyers data
+        
+        try:
+            strat.kite_client = strat.zerodha_login()
+            print("[Main Fyers/Zerodha] Zerodha login successful")
+        except Exception as e:
+            print(f"[Main Fyers/Zerodha] CRITICAL: Zerodha login failed: {e}")
+            strat.write_to_order_logs(f"CRITICAL ERROR: Zerodha login failed at startup: {e}")
+            raise  # Cannot proceed without Zerodha for orders
 
         # 4.3 Load user settings (symbols, expiries, timeframes, indicator params, pyramiding settings)
         print("\n[Main Fyers/Zerodha] Fetching user settings from TradeSettings.csv...")
         strat.get_user_settings()
         print("[Main Fyers/Zerodha] User settings loaded successfully!")
 
-        # 4.4 Initialize / verify signal.csv (same as original strategy)
-        print("\n[Main Fyers/Zerodha] Initializing signal.csv file...")
+        # 4.4 Initialize per-symbol signal CSV files (e.g. crudeoilsignal.csv, bankniftysignal.csv)
+        print("\n[Main Fyers/Zerodha] Initializing per-symbol signal CSV files...")
         strat.initialize_signal_csv()
 
         # 4.5 Determine timeframe for scheduling (use first symbol's timeframe)
@@ -347,17 +667,86 @@ if __name__ == "__main__":
         print("\n[Main Fyers/Zerodha] Initialization complete. Starting main strategy loop...")
         print("=" * 60)
 
+        # Track last auto-login date to avoid multiple logins per day
+        last_auto_login_date = None
+
         # 4.6 Main candle‑based scheduling loop
         while True:
             now = datetime.now()
             current_time = now.time()
+            current_date = now.date()
 
-            # Optional: keep Zerodha session fresh at 9:00 AM (as in original)
+            # Check if we should skip trading (outside market hours or weekends)
+            if should_skip_trading():
+                weekday = now.weekday()
+                if weekday >= 5:
+                    print(f"[Main Fyers/Zerodha] Weekend detected ({now.strftime('%A')}). Waiting until Monday...")
+                    # Wait until Monday 9:00 AM
+                    days_until_monday = (7 - weekday) % 7
+                    if days_until_monday == 0:
+                        days_until_monday = 7  # If it's Sunday, wait until next Monday
+                    next_monday = now + timedelta(days=days_until_monday)
+                    next_monday = next_monday.replace(hour=9, minute=0, second=0, microsecond=0)
+                    wait_seconds = (next_monday - now).total_seconds()
+                    print(f"[Main Fyers/Zerodha] Waiting {wait_seconds/3600:.1f} hours until {next_monday.strftime('%Y-%m-%d %H:%M:%S')}")
+                    time.sleep(min(wait_seconds, 3600))  # Sleep in 1-hour chunks
+                    continue
+                else:
+                    # Outside trading hours on weekday
+                    market_close_time = dt_time(MARKET_CLOSE_HOUR, MARKET_CLOSE_MINUTE)
+                    market_open_time = dt_time(MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE)
+                    print(f"[Main Fyers/Zerodha] Outside trading hours ({current_time.strftime('%H:%M:%S')}). Market hours: {MARKET_OPEN_HOUR:02d}:{MARKET_OPEN_MINUTE:02d} - {MARKET_CLOSE_HOUR:02d}:{MARKET_CLOSE_MINUTE:02d} IST")
+                    # Wait until market opens (next day if after market close, or today if before market open)
+                    if current_time > market_close_time:
+                        # After market close, wait until market open next day
+                        next_day = now + timedelta(days=1)
+                        next_open = next_day.replace(hour=MARKET_OPEN_HOUR, minute=MARKET_OPEN_MINUTE, second=0, microsecond=0)
+                    else:
+                        # Before market open, wait until market open today
+                        next_open = now.replace(hour=MARKET_OPEN_HOUR, minute=MARKET_OPEN_MINUTE, second=0, microsecond=0)
+                        if next_open <= now:
+                            # Already past market open today, wait until next day
+                            next_open = (now + timedelta(days=1)).replace(hour=MARKET_OPEN_HOUR, minute=MARKET_OPEN_MINUTE, second=0, microsecond=0)
+                    
+                    wait_seconds = (next_open - now).total_seconds()
+                    print(f"[Main Fyers/Zerodha] Waiting {wait_seconds/3600:.1f} hours until market opens at {next_open.strftime('%Y-%m-%d %H:%M:%S')}")
+                    time.sleep(min(wait_seconds, 3600))  # Sleep in 1-hour chunks
+                    continue
+
+            # Auto-login both Fyers and Zerodha at 9:00 AM (keep sessions fresh daily)
+            # Also check if we just started and it's after 9 AM - do initial login check
+            should_auto_login = False
             if current_time.hour == 9 and current_time.minute == 0 and current_time.second < 5:
-                print("\n[Main Fyers/Zerodha] 9:00 AM detected - Performing Zerodha auto‑login...")
-                strat.kite_client = strat.zerodha_login()
-                strat.write_to_order_logs("Zerodha auto‑login performed at 9:00 AM")
-                time.sleep(5)
+                # Standard 9:00 AM auto-login
+                should_auto_login = True
+            elif current_time.hour >= 9 and last_auto_login_date != current_date:
+                # First run after 9 AM today - do initial login
+                should_auto_login = True
+            
+            if should_auto_login:
+                print("\n[Main Fyers/Zerodha] 9:00 AM detected - Performing auto‑login for both brokers...")
+                
+                # Auto-login to Fyers (data provider)
+                try:
+                    print("[Main Fyers/Zerodha] Performing Fyers auto‑login...")
+                    fyers_login()
+                    strat.write_to_order_logs("Fyers auto‑login performed at 9:00 AM")
+                except Exception as e:
+                    print(f"[Main Fyers/Zerodha] Error during Fyers auto‑login: {e}")
+                    strat.write_to_order_logs(f"ERROR: Fyers auto‑login failed at 9:00 AM: {e}")
+                
+                # Auto-login to Zerodha (order execution)
+                try:
+                    print("[Main Fyers/Zerodha] Performing Zerodha auto‑login...")
+                    strat.kite_client = strat.zerodha_login()
+                    strat.write_to_order_logs("Zerodha auto‑login performed at 9:00 AM")
+                except Exception as e:
+                    print(f"[Main Fyers/Zerodha] Error during Zerodha auto‑login: {e}")
+                    strat.write_to_order_logs(f"ERROR: Zerodha auto‑login failed at 9:00 AM: {e}")
+                
+                time.sleep(5)  # Wait to avoid multiple logins
+                # Mark that we've done auto-login today
+                last_auto_login_date = current_date
 
             # Compute next candle time based on timeframe_minutes
             next_candle_time = strat.get_next_candle_time(now, timeframe_minutes)
@@ -386,10 +775,19 @@ if __name__ == "__main__":
                 f"\n[Main Fyers/Zerodha] Executing strategy at "
                 f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             )
-            main_strategy_fyers_zerodha()
-
-            # Save trading state after each cycle
-            strat.save_trading_state()
+            try:
+                main_strategy_fyers_zerodha()
+            except Exception as strategy_error:
+                print(f"[Main Fyers/Zerodha] Error in strategy execution: {strategy_error}")
+                strat.write_to_order_logs(f"ERROR: Strategy execution failed: {strategy_error}")
+                traceback.print_exc()
+            finally:
+                # Always save trading state, even if strategy execution failed
+                try:
+                    strat.save_trading_state()
+                except Exception as save_error:
+                    print(f"[Main Fyers/Zerodha] CRITICAL: Failed to save trading state: {save_error}")
+                    strat.write_to_order_logs(f"CRITICAL ERROR: Failed to save trading state: {save_error}")
 
     except KeyboardInterrupt:
         print("\n[Main Fyers/Zerodha] Program interrupted by user. Saving state and exiting...")
